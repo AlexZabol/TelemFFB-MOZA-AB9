@@ -90,3 +90,30 @@ def test_is_moza_device():
     info = MagicMock(vendor_id=0x346E)
     assert ffb_moza.is_moza_device(info)
     assert not ffb_moza.is_moza_device(MagicMock(vendor_id=0xFFFF))
+
+
+@pytest.mark.unit
+def test_set_base_mode_writes_steer_force_mode():
+    dev = ffb_moza.MozaFFBDevice.__new__(ffb_moza.MozaFFBDevice)
+    calls = []
+    dev.sdk = MagicMock(is_open=True)
+    dev.sdk.set_param_uint.side_effect = lambda pid, v: calls.append((pid, v)) or 0
+    assert dev.set_base_mode("FS")
+    assert dev.set_base_mode("FFB")
+    assert not dev.set_base_mode("KEEP")
+    assert calls == [(ffb_moza.PARAM_STEER_FORCE_MODE, 1), (ffb_moza.PARAM_STEER_FORCE_MODE, 0)]
+
+
+@pytest.mark.unit
+def test_moza_base_mode_mixin_applies_once(monkeypatch):
+    from telemffb.hw.ffb_rhino import HapticEffect
+    from telemffb.sim.base.MozaBaseModeMixIn import MozaBaseModeMixIn
+    dev = MagicMock(connected=True)
+    dev.set_base_mode.return_value = True
+    monkeypatch.setattr(HapticEffect, "device", dev)
+    m = MozaBaseModeMixIn.__new__(MozaBaseModeMixIn)
+    m._moza_mode_applied = "KEEP"
+    m.moza_base_mode = "FS"
+    m._apply_moza_base_mode()
+    m._apply_moza_base_mode()
+    dev.set_base_mode.assert_called_once_with("FS")

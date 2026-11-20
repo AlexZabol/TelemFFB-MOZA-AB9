@@ -17,6 +17,7 @@ the base accepts every command and produces no force, in either mode.
   (falls back to plain DirectInput if the SDK is unavailable; `TELEMFFB_MOZA_DISABLE=1` turns it off).
 - `main.py` — preloads the system `msvcp140*.dll` before PyQt6 (PyQt6's bundled 14.26 runtime crashes
   `MOZA_SDK.dll`).
+- Basic Settings → **MOZA Base Mode** (Don't change / Force Feedback / Force Sensing), stored per sim/class/aircraft like any setting and applied when the aircraft loads (`telemffb/sim/base/MozaBaseModeMixIn.py`, `MozaFFBDevice.set_base_mode`).
 - `.github/workflows/moza-build.yaml` — daily: merge upstream, test, build, release.
 - `moza/update_telemffb_moza.ps1` — local installer/updater.
 

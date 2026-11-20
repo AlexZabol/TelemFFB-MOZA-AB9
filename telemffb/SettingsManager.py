@@ -25,6 +25,11 @@ class SpringModeEnum(Enum):
     FORCETRIM = auto()
     DINPUT_TAP = auto()
 
+class MozaBaseModeEnum(Enum):
+    KEEP = auto()
+    FFB = auto()
+    FS = auto()
+
 class GEffectModeEnum(Enum):
     DISABLED = auto()
     LEGACY = auto()
@@ -238,6 +243,13 @@ class SettingsManager(QObject):
 
 
 
+
+    # MOZA flight base (AB6/AB9) operating mode, applied when the aircraft loads
+    MOZA_BASE_MODE = {
+        MozaBaseModeEnum.KEEP: "Don't change (keep current base mode)",
+        MozaBaseModeEnum.FFB: "Force Feedback",
+        MozaBaseModeEnum.FS: "Force Sensing",
+    }
 
     # used for both joystick and pedals
     MSFS_XP_JOYSTICK_SPRING_MODE = {

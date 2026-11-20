@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="UTF-8"?>
+<?xml version="1.0" encoding="UTF-8"?>
 <!--
   TelemFFB Configuration Schema
   For full documentation of this file's structure, element types, and field semantics,
@@ -130,6 +130,25 @@
 		<pedals>true</pedals>
 		<collective>true</collective>
 		<validvalues>PropellerAircraft,TurbopropAircraft,JetAircraft,Helicopter,GliderAircraft,XAW109Helicopter</validvalues>
+	</defaults>
+	<defaults>
+		<grouping>MOZA Base</grouping>
+		<parentgroup>basic</parentgroup>
+		<order>150.0</order>
+		<datatype>enumlist</datatype>
+		<name>moza_base_mode</name>
+		<displayname>MOZA Base Mode</displayname>
+		<prereq>basic_group</prereq>
+		<info>MOZA flight bases (AB6/AB9) only: switch the base to Force Feedback or Force Sensing when this aircraft loads.  TelemFFB effects work in both modes.  'Don't change' leaves the mode set in MOZA Cockpit / on the base.</info>
+		<DCS>true</DCS>
+		<BMS>true</BMS>
+		<IL2>true</IL2>
+		<IL2K>true</IL2K>
+		<MSFS>true</MSFS>
+		<XPLANE>true</XPLANE>
+		<joystick>true</joystick>
+		<validvalues>MOZA_BASE_MODE</validvalues>
+		<value>KEEP</value>
 	</defaults>
 	<defaults>
 		<effecttype>spring</effecttype>

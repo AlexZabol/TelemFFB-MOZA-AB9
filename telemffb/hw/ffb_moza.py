@@ -67,6 +67,8 @@ CMD_ENVELOPE = 608          # idx, attackLevel(u16), fadeLevel(u16), attackTime(
 CMD_OPERATION = 609         # idx, op (0 stop, 1 start, 2 free)
 CMD_CONTROL = 610           # 1 start calculation, 2 reset/free all, 3 (sent by Cockpit before playing)
 PARAM_TORQUE_OUT_X = 95     # Main_Steer_TorqueOutX - polling it is what keeps FFB alive
+PARAM_STEER_FORCE_MODE = 247  # Main_SteerForceMode: 0 = Force Feedback, 1 = Force Sensing
+BASE_MODES = {"FFB": 0, "FS": 1}
 
 OP_STOP, OP_START, OP_FREE = 0, 1, 2
 AXIS_DIRECTION_ENABLE = 4   # enableAxis: bit2 = use direction (what Cockpit sends)
@@ -151,6 +153,7 @@ class MozaSdk:
                 ("Moza_DeviceOpen", c_int32, [c_uint32, POINTER(c_void_p)]),
                 ("Moza_DeviceClose", c_int32, [c_void_p]),
                 ("Moza_DeviceParameterFetch", c_int32, [c_void_p, c_int32]),
+                ("Moza_DeviceParameterSetValue", c_int32, [c_void_p, c_int32, pV]),
                 ("Moza_DeviceCommandSend", c_int32, [c_void_p, c_int32, pV]),
                 ("Moza_DeviceCommandSendSync", c_int32, [c_void_p, c_int32, pV, c_int32, pV])):
             fn = getattr(L, name)
@@ -246,6 +249,16 @@ class MozaSdk:
             finally:
                 self._L.Moza_ValueDestroy(byref(res))
                 self._L.Moza_ValueDestroy(byref(args))
+
+    def set_param_uint(self, param_id: int, value: int) -> int:
+        """Asynchronously write an unsigned parameter; returns the SDK error code."""
+        with self._lock:
+            if not self._h:
+                return -1
+            v = _Value()
+            v.type = _VT_UINT
+            v.data.uintValue = int(value)
+            return self._L.Moza_DeviceParameterSetValue(self._h, param_id, byref(v))
 
     def poll_torque(self) -> int:
         with self._lock:
@@ -456,6 +469,20 @@ class MozaFFBDevice(DInputFFBDevice):
         self.sdk.send(CMD_CONTROL, [("i", 2)], sync=True)
         self.sdk.send(CMD_CONTROL, [("i", 1)], sync=True)
         self.sdk.send(CMD_CONTROL, [("i", 3)], sync=True)
+
+    # -- base mode -------------------------------------------------------------------
+    def set_base_mode(self, mode: str) -> bool:
+        """Switch the base to "FFB" (Force Feedback) or "FS" (Force Sensing).
+        Returns True when the request was accepted.  Effects keep working in both
+        modes (the keepalive poll is what matters)."""
+        value = BASE_MODES.get(str(mode).upper())
+        if value is None or not self.sdk.is_open:
+            return False
+        e = self.sdk.set_param_uint(PARAM_STEER_FORCE_MODE, value)
+        if e not in (_ERR_OK, _ERR_PENDING, _ERR_BUSY):
+            logging.warning(f"MOZA: setting base mode {mode} failed (err {e})")
+            return False
+        return True
 
     # -- keepalive -------------------------------------------------------------------
     def _keepalive_loop(self):
