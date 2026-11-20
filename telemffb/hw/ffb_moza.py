@@ -69,6 +69,11 @@ CMD_CONTROL = 610           # 1 start calculation, 2 reset/free all, 3 (sent by 
 PARAM_TORQUE_OUT_X = 95     # Main_Steer_TorqueOutX - polling it is what keeps FFB alive
 PARAM_STEER_FORCE_MODE = 247  # Main_SteerForceMode: 0 = Force Feedback, 1 = Force Sensing
 BASE_MODES = {"FFB": 0, "FS": 1}
+# Main_CtrlModeSet: which FFB source the base renders - 0 Telemetry FFB, 1 DirectInput FFB,
+# 2 both.  MOZA Cockpit writes 0 in Force Sensing and 1 (or 2) in Force Feedback; with 1 the
+# base ignores our (telemetry) effects, so TelemFFB always selects 2.
+PARAM_CTRL_MODE = 53
+CTRL_MODE_TELEMETRY_AND_DINPUT = 2
 
 OP_STOP, OP_START, OP_FREE = 0, 1, 2
 AXIS_DIRECTION_ENABLE = 4   # enableAxis: bit2 = use direction (what Cockpit sends)
@@ -280,14 +285,18 @@ class MozaSdk:
                 self._L.Moza_ValueDestroy(byref(res))
                 self._L.Moza_ValueDestroy(byref(args))
 
-    def set_param_uint(self, param_id: int, value: int) -> int:
-        """Asynchronously write an unsigned parameter; returns the SDK error code."""
+    def set_param_uint(self, param_id: int, value: int, signed: bool = False) -> int:
+        """Asynchronously write an integer parameter; returns the SDK error code."""
         with self._lock:
             if not self._h:
                 return -1
             v = _Value()
-            v.type = _VT_UINT
-            v.data.uintValue = int(value)
+            if signed:
+                v.type = _VT_INT
+                v.data.intValue = int(value)
+            else:
+                v.type = _VT_UINT
+                v.data.uintValue = int(value)
             return self._L.Moza_DeviceParameterSetValue(self._h, param_id, byref(v))
 
     def poll_torque(self) -> int:
@@ -437,6 +446,8 @@ class MozaFFBDevice(DInputFFBDevice):
         self._slot_lock = threading.Lock()
         self._keepalive_stop = threading.Event()
         super().__init__(guid, **kwargs)
+        if self.ensure_telemetry_ffb_source():
+            logging.info("MOZA: FFB source set to Telemetry + DirectInput (Main_CtrlModeSet=2)")
         self.sdk.send(CMD_CONTROL, [("i", 1)], sync=True)   # start effect calculation
         self.sdk.send(CMD_CONTROL, [("i", 3)], sync=True)   # as Cockpit does before playing
         self._keepalive = threading.Thread(target=self._keepalive_loop, name="MozaFFBKeepalive", daemon=True)
@@ -511,6 +522,17 @@ class MozaFFBDevice(DInputFFBDevice):
         e = self.sdk.set_param_uint(PARAM_STEER_FORCE_MODE, value)
         if e not in (_ERR_OK, _ERR_PENDING, _ERR_BUSY):
             logging.warning(f"MOZA: setting base mode {mode} failed (err {e})")
+            return False
+        self.ensure_telemetry_ffb_source()
+        return True
+
+    def ensure_telemetry_ffb_source(self) -> bool:
+        """Make the base render telemetry (MOZA SDK) effects as well as DirectInput ones."""
+        if not self.sdk.is_open:
+            return False
+        e = self.sdk.set_param_uint(PARAM_CTRL_MODE, CTRL_MODE_TELEMETRY_AND_DINPUT, signed=True)
+        if e not in (_ERR_OK, _ERR_PENDING, _ERR_BUSY):
+            logging.warning(f"MOZA: setting FFB source (Main_CtrlModeSet=2) failed (err {e})")
             return False
         return True
 

@@ -97,11 +97,12 @@ def test_set_base_mode_writes_steer_force_mode():
     dev = ffb_moza.MozaFFBDevice.__new__(ffb_moza.MozaFFBDevice)
     calls = []
     dev.sdk = MagicMock(is_open=True)
-    dev.sdk.set_param_uint.side_effect = lambda pid, v: calls.append((pid, v)) or 0
+    dev.sdk.set_param_uint.side_effect = lambda pid, v, signed=False: calls.append((pid, v)) or 0
     assert dev.set_base_mode("FS")
     assert dev.set_base_mode("FFB")
     assert not dev.set_base_mode("KEEP")
-    assert calls == [(ffb_moza.PARAM_STEER_FORCE_MODE, 1), (ffb_moza.PARAM_STEER_FORCE_MODE, 0)]
+    ctrl = (ffb_moza.PARAM_CTRL_MODE, ffb_moza.CTRL_MODE_TELEMETRY_AND_DINPUT)
+    assert calls == [(ffb_moza.PARAM_STEER_FORCE_MODE, 1), ctrl, (ffb_moza.PARAM_STEER_FORCE_MODE, 0), ctrl]
 
 
 @pytest.mark.unit
