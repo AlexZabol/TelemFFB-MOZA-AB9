@@ -1,7 +1,7 @@
-<#
+﻿<#
   Update / install TelemFFB-MOZA from the latest GitHub release of the fork.
 
-  - Downloads the newest release zip of AlexZabol/VPforce-TelemFFB (tags "moza-*").
+  - Downloads the newest release zip of AlexZabol/VPforce-TelemFFB (tags "vX.Y.N").
   - Installs it into $InstallDir (default: C:\TelemFFB-MOZA), keeping a backup of the previous version.
   - Copies MOZA_SDK.dll (x64) from your own MOZA SDK download into the install folder
     (the DLL is not redistributed in the release).
@@ -21,7 +21,7 @@ $headers = @{ "User-Agent" = "telemffb-moza-updater" }
 
 Write-Host "Checking latest release of $Repo ..."
 $rels = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases?per_page=20" -Headers $headers
-$rel = $rels | Where-Object { $_.tag_name -like "moza-*" -and -not $_.draft } | Select-Object -First 1
+$rel = $rels | Where-Object { ($rel = $rels | Where-Object { $_.tag_name -like "moza-*" -and -not $_.draft } | Select-Object -First 1.tag_name -like "v*" -or $rel = $rels | Where-Object { $_.tag_name -like "moza-*" -and -not $_.draft } | Select-Object -First 1.tag_name -like "moza-*") -and -not $_.draft } | Select-Object -First 1
 if (-not $rel) { throw "No moza-* release found in $Repo" }
 $asset = $rel.assets | Where-Object { $_.name -like "*.zip" } | Select-Object -First 1
 $tag = $rel.tag_name
