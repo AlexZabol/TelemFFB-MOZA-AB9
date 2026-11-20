@@ -2,6 +2,7 @@
 import logging
 from typing import override
 
+from telemffb.hw.ffb_moza import base_mode_supported
 from telemffb.hw.ffb_rhino import HapticEffect
 from telemffb.sim.base.AircraftEffectUtilsBase import AircraftEffectUtilsBase
 from telemffb.sim.BaseTelemetryData import BaseTelemetryData
@@ -26,10 +27,10 @@ class MozaBaseModeMixIn(AircraftEffectUtilsBase):
         if mode == self._moza_mode_applied:
             return
         dev = HapticEffect.device
-        setter = getattr(dev, "set_base_mode", None) if dev is not None else None
-        if setter is None or not getattr(dev, "connected", False):
-            self._moza_mode_applied = mode        # not a MOZA base: nothing to do
+        if not base_mode_supported(dev) or not getattr(dev, "connected", False):
+            self._moza_mode_applied = mode        # not a MOZA AB9: nothing to do
             return
+        setter = dev.set_base_mode
         if mode == "KEEP":
             self._moza_mode_applied = mode
             return

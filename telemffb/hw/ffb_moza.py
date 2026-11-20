@@ -134,6 +134,36 @@ def is_moza_device(info) -> bool:
     return getattr(info, "vendor_id", None) == MOZA_VENDOR_ID
 
 
+AB9_PRODUCT_ID = 0x1000
+
+
+def base_mode_supported(device=None) -> bool:
+    """Whether the connected device is a MOZA AB9 driven by the MOZA SDK backend -
+    the only base with a Force Sensing mode.  Gates the 'MOZA Base Mode' setting."""
+    if device is None:
+        from telemffb.hw.ffb_rhino import HapticEffect
+        device = HapticEffect.device
+    if device is None or not hasattr(device, "set_base_mode"):
+        return False
+    info = getattr(device, "info", None)
+    name = str(getattr(info, "product_string", "") or "").upper()
+    return getattr(info, "product_id", None) == AB9_PRODUCT_ID or "AB9" in name
+
+
+def apply_base_mode_setting(value) -> bool:
+    """Apply a 'moza_base_mode' setting value (KEEP / FFB / FS, str or enum) to the
+    connected base right away - used when the user changes the setting, which also
+    covers Offline/Preview mode where no aircraft telemetry runs."""
+    mode = str(getattr(value, "name", value) or "KEEP").upper()
+    if mode not in BASE_MODES or not base_mode_supported():
+        return False
+    from telemffb.hw.ffb_rhino import HapticEffect
+    ok = HapticEffect.device.set_base_mode(mode)
+    if ok:
+        logging.info(f"MOZA: base mode set to {'Force Sensing' if mode == 'FS' else 'Force Feedback'} (settings)")
+    return ok
+
+
 class MozaSdk:
     """Minimal thread-safe ctypes wrapper around MOZA_SDK.dll for one flight base."""
 

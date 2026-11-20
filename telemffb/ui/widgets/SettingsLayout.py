@@ -369,7 +369,14 @@ class SettingsLayout(QGridLayout):
 
     def eliminate_invisible(self, datalist):
         newlist = []
+        try:
+            from telemffb.hw import ffb_moza
+            moza_mode_ok = ffb_moza.base_mode_supported()
+        except Exception:
+            moza_mode_ok = False
         for item in datalist:
+            if item['name'] == 'moza_base_mode' and not moza_mode_ok:
+                continue    # only offered when a MOZA AB9 is connected
             if item['is_visible'] == 'true':
                 newlist.append(item)
 

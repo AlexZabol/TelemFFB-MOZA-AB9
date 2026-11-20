@@ -197,6 +197,14 @@ class SettingsManager(QObject):
         return value
 
     def write_to_xml(self, sim, class_name, model, value, setting, unit='', the_device='', scope='MODEL'):
+        if setting == 'moza_base_mode':
+            # switch the MOZA base immediately - also in Offline/Preview mode,
+            # where no aircraft telemetry would apply it
+            try:
+                from telemffb.hw import ffb_moza
+                ffb_moza.apply_base_mode_setting(value)
+            except Exception:
+                logging.exception("MOZA: applying base mode from settings failed")
         if not self.offline_mode:
             if not model:
                 # An aircraft nothing names has no profile to hold a change.

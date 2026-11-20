@@ -139,7 +139,7 @@
 		<name>moza_base_mode</name>
 		<displayname>MOZA Base Mode</displayname>
 		<prereq>basic_group</prereq>
-		<info>MOZA flight bases (AB6/AB9) only: switch the base to Force Feedback or Force Sensing when this aircraft loads.  TelemFFB effects work in both modes.  'Don't change' leaves the mode set in MOZA Cockpit / on the base.</info>
+		<info>MOZA AB9 only: switch the base to Force Feedback or Force Sensing when this aircraft loads.  TelemFFB effects work in both modes.  &apos;Don&apos;t change&apos; leaves the mode set in MOZA Cockpit / on the base.</info>
 		<DCS>true</DCS>
 		<BMS>true</BMS>
 		<IL2>true</IL2>

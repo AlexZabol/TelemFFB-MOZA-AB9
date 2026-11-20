@@ -109,6 +109,7 @@ def test_moza_base_mode_mixin_applies_once(monkeypatch):
     from telemffb.hw.ffb_rhino import HapticEffect
     from telemffb.sim.base.MozaBaseModeMixIn import MozaBaseModeMixIn
     dev = MagicMock(connected=True)
+    dev.info = MagicMock(product_id=0x1000, product_string="MOZA AB9 FFB Base")
     dev.set_base_mode.return_value = True
     monkeypatch.setattr(HapticEffect, "device", dev)
     m = MozaBaseModeMixIn.__new__(MozaBaseModeMixIn)
@@ -117,3 +118,12 @@ def test_moza_base_mode_mixin_applies_once(monkeypatch):
     m._apply_moza_base_mode()
     m._apply_moza_base_mode()
     dev.set_base_mode.assert_called_once_with("FS")
+
+
+@pytest.mark.unit
+def test_base_mode_only_for_ab9():
+    ab9 = MagicMock(info=MagicMock(product_id=0x1000, product_string="MOZA AB9 FFB Base"))
+    ab6 = MagicMock(info=MagicMock(product_id=0x1001, product_string="MOZA AB6 FFB Base"))
+    assert ffb_moza.base_mode_supported(ab9)
+    assert not ffb_moza.base_mode_supported(ab6)
+    assert not ffb_moza.base_mode_supported(MagicMock(spec=[]))
