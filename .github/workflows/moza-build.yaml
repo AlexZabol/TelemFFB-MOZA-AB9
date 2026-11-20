@@ -152,6 +152,7 @@ jobs:
           echo "package dir: $OUT"
           test -n "$OUT"
           test ! -e "$OUT/MOZA_SDK.dll"
+          cp moza/INSTALL.txt moza/add_moza_sdk.ps1 "$OUT/"
           7z a -tzip "TelemFFB-MOZA-${{ needs.prepare.outputs.version }}.zip" "./$OUT/*" > /dev/null
       - name: Publish release
         env:
@@ -196,6 +197,8 @@ jobs:
           $(cat changes.md)
 
           Build key: upstream=${UP} moza=${ME}
+
+          Installation: see INSTALL.txt inside the zip.
 
           MOZA_SDK.dll is not included (no redistribution licence). Install with
           moza/update_telemffb_moza.ps1, which adds it from your own MOZA SDK download.

@@ -1,0 +1,59 @@
+TelemFFB MOZA - installation
+============================
+
+TelemFFB with MOZA flight base support: telemetry effects (engine rumble, guns, gear,
+buffeting, ...) play on a MOZA AB9 base (tested), in both Force Feedback and Force Sensing mode.
+Source and updates: https://github.com/AlexZabol/VPforce-TelemFFB (branch "moza").
+
+
+1. Requirements (install once)
+------------------------------
+a) MOZA Cockpit - https://mozaracing.com (Downloads). It installs the MOZA DeviceService
+   that TelemFFB talks to. Make sure the base works in MOZA Cockpit.
+b) DirectLink - TelemFFB's DirectInput bridge for non-VPforce devices. Download it from
+   the link in TelemFFB: System Settings > Integrations.
+c) MOZA SDK - https://mozaracing.com/pages/sdk (Flight SDK, file MOZA_SDK_x.x.x.x_en.zip).
+   Only one file of it is needed (step 2). It is not included here: MOZA does not allow
+   redistributing it.
+
+
+2. Add MOZA_SDK.dll (once per installed version)
+------------------------------------------------
+Option A - automatic: right-click "add_moza_sdk.ps1" in this folder > "Run with PowerShell".
+   It finds the MOZA SDK zip in your Downloads folder and copies MOZA_SDK.dll here.
+   (Or run:  powershell -ExecutionPolicy Bypass -File add_moza_sdk.ps1 -SdkZip "C:\path\MOZA_SDK_1.0.0.6_en.zip")
+
+Option B - by hand: open the MOZA SDK zip and copy
+   MOZA_SDK\x64-release\bin\MOZA_SDK.dll
+   into this folder, next to VPforce-TelemFFB.exe.
+
+
+3. Start
+--------
+- Close the MOZA Cockpit window (its background service may keep running).
+  TelemFFB and MOZA Cockpit cannot use the base at the same time.
+- Do not run the official VPforce TelemFFB at the same time.
+- Start VPforce-TelemFFB.exe. On first start, assign your MOZA base in System Settings
+  (enable DirectInput devices if asked).
+- The log (Log menu) should show:  "MOZA: SDK effect channel open on 'AB9 Base'".
+  If it says MOZA_SDK.dll is missing, repeat step 2.
+
+
+4. Using it
+-----------
+- Basic Settings > "MOZA Base Mode" (AB9 only): Don't change / Force Feedback / Force Sensing.
+  Like any TelemFFB setting it can be set per sim, class or aircraft (e.g. F-16 in Force
+  Sensing); the base switches when the aircraft loads or when you change the setting.
+- Effects work in both modes. Strength: the usual TelemFFB sliders and Effect Levels.
+- This build never offers the official TelemFFB update (that would remove MOZA support).
+
+
+5. Updating
+-----------
+Download the newest TelemFFB-MOZA-x.y.z.zip from
+https://github.com/AlexZabol/VPforce-TelemFFB/releases and repeat steps 2-3, or use
+moza/update_telemffb_moza.ps1 from the repository, which does it automatically.
+
+
+Licence: GPL-3.0 (see COPYING.txt in the repository). Based on VPforce TelemFFB
+(https://github.com/walmis/VPforce-TelemFFB). MOZA SDK (c) MOZA, obtained by the user.
