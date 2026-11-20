@@ -103,7 +103,11 @@ jobs:
 
   build:
     needs: [prepare, test]
-    runs-on: ubuntu-latest
+    # native Windows runner (the upstream wine-based pyinstaller action fails on current runners)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
         with:
@@ -116,18 +120,26 @@ jobs:
           git remote add upstream https://github.com/walmis/VPforce-TelemFFB.git
           git fetch --no-tags upstream refactor
           git merge --no-edit upstream/refactor
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
       - name: Create Version file
         run: |
           echo "VERSION = \"${{ needs.prepare.outputs.tag }}\"" > version.py
           echo "RELEASE = False" >> version.py
       - name: Package Application
-        uses: walmis/pyinstaller-action-windows@py312
-        with:
-          path: .
+        run: pyinstaller --noconfirm VPforce-TelemFFB.spec
       - name: Make Zip
         run: |
-          test ! -e dist/windows/VPforce-TelemFFB/MOZA_SDK.dll
-          cd dist/windows/VPforce-TelemFFB && zip -qr "../../../TelemFFB-MOZA-${{ needs.prepare.outputs.tag }}.zip" .
+          OUT=$(dirname "$(find dist -name 'VPforce-TelemFFB.exe' | head -n 1)")
+          echo "package dir: $OUT"
+          test -n "$OUT"
+          test ! -e "$OUT/MOZA_SDK.dll"
+          7z a -tzip "TelemFFB-MOZA-${{ needs.prepare.outputs.tag }}.zip" "./$OUT/*" > /dev/null
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
