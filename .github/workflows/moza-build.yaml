@@ -167,25 +167,25 @@ jobs:
           PUP=$(echo "$PREV_BODY" | sed -n 's/.*upstream=\([0-9a-f]\{8\}\).*/\1/p' | head -n 1)
           PME=$(echo "$PREV_BODY" | sed -n 's/.*moza=\([0-9a-f]\{8\}\).*/\1/p' | head -n 1)
           {
-            echo "## Изменения / Changes"
+            echo "## Changes"
             echo
-            echo "**MOZA (этот форк):**"
+            echo "**MOZA (this fork):**"
             if [ -n "$PME" ] && git cat-file -e "$PME" 2>/dev/null; then
               L=$(git log --no-merges --format='- %s' "$PME..$ME" -- . ':!.github' | head -n 30)
             else
               L=$(git log --no-merges --format='- %s' upstream/refactor..$ME | head -n 30)
             fi
-            echo "${L:-- без изменений / no changes}"
+            echo "${L:-- no changes}"
             echo
-            echo "**TelemFFB (оригинал walmis/VPforce-TelemFFB):**"
+            echo "**TelemFFB (upstream walmis/VPforce-TelemFFB):**"
             if [ -n "$PUP" ] && git cat-file -e "$PUP" 2>/dev/null; then
               L=$(git log --no-merges --format='- %s' "$PUP..$UP" | head -n 40)
               N=$(git rev-list --no-merges --count "$PUP..$UP")
-              [ "$N" -gt 40 ] && L="$L"$'\n'"- … и ещё $((N-40)) / and $((N-40)) more"
+              [ "$N" -gt 40 ] && L="$L"$'\n'"- ... and $((N-40)) more"
             else
-              L="- первая сборка на базе TelemFFB ${BASE} / first build on TelemFFB ${BASE}"
+              L="- first build on TelemFFB ${BASE}"
             fi
-            echo "${L:-- без изменений / no changes}"
+            echo "${L:-- no changes}"
             echo
           } > changes.md
           cat changes.md
