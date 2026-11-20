@@ -160,11 +160,42 @@ jobs:
           TAG="${{ needs.prepare.outputs.tag }}"
           VERSION="${{ needs.prepare.outputs.version }}"
           BASE="${{ needs.prepare.outputs.base }}"
+          UP="${{ needs.prepare.outputs.upstream }}"
+          ME="${{ needs.prepare.outputs.moza }}"
+          # --- what changed since the previous release (its notes carry the build key) ---
+          PREV_BODY=$(gh release view --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || true)
+          PUP=$(echo "$PREV_BODY" | sed -n 's/.*upstream=\([0-9a-f]\{8\}\).*/\1/p' | head -n 1)
+          PME=$(echo "$PREV_BODY" | sed -n 's/.*moza=\([0-9a-f]\{8\}\).*/\1/p' | head -n 1)
+          {
+            echo "## Изменения / Changes"
+            echo
+            echo "**MOZA (этот форк):**"
+            if [ -n "$PME" ] && git cat-file -e "$PME" 2>/dev/null; then
+              L=$(git log --no-merges --format='- %s' "$PME..$ME" -- . ':!.github' | head -n 30)
+            else
+              L=$(git log --no-merges --format='- %s' upstream/refactor..$ME | head -n 30)
+            fi
+            echo "${L:-- без изменений / no changes}"
+            echo
+            echo "**TelemFFB (оригинал walmis/VPforce-TelemFFB):**"
+            if [ -n "$PUP" ] && git cat-file -e "$PUP" 2>/dev/null; then
+              L=$(git log --no-merges --format='- %s' "$PUP..$UP" | head -n 40)
+              N=$(git rev-list --no-merges --count "$PUP..$UP")
+              [ "$N" -gt 40 ] && L="$L"$'\n'"- … и ещё $((N-40)) / and $((N-40)) more"
+            else
+              L="- первая сборка на базе TelemFFB ${BASE} / first build on TelemFFB ${BASE}"
+            fi
+            echo "${L:-- без изменений / no changes}"
+            echo
+          } > changes.md
+          cat changes.md
           cat > notes.md <<EOF
           TelemFFB MOZA ${VERSION}, based on TelemFFB ${BASE}: TelemFFB with the MOZA SDK backend
           (effects work in the MOZA base's Force Sensing mode).
 
-          Build key: upstream=${{ needs.prepare.outputs.upstream }} moza=${{ needs.prepare.outputs.moza }}
+          $(cat changes.md)
+
+          Build key: upstream=${UP} moza=${ME}
 
           MOZA_SDK.dll is not included (no redistribution licence). Install with
           moza/update_telemffb_moza.ps1, which adds it from your own MOZA SDK download.
