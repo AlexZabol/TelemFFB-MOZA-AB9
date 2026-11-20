@@ -28,5 +28,27 @@ the base accepts every command and produces no force, in either mode.
   here or in the releases (the SDK has no redistribution licence); the updater copies it from your own
   SDK download.
 
+## Install (ready-made build)
+1. Install **MOZA Cockpit** (provides MOZA DeviceService) and **DirectLink** (TelemFFB's DirectInput bridge,
+   linked from TelemFFB's System Settings > Integrations).
+2. Download the **MOZA SDK** zip from https://mozaracing.com/pages/sdk.
+3. Either run `moza/update_telemffb_moza.ps1` (downloads the latest release to `C:\TelemFFB-MOZA` and adds
+   `MOZA_SDK.dll` from the SDK zip in your Downloads folder), or by hand: download `TelemFFB-MOZA-x.y.z.zip`
+   from [Releases](../../releases), unzip it anywhere, and copy `MOZA_SDK\x64-release\bin\MOZA_SDK.dll` from the
+   SDK zip next to `VPforce-TelemFFB.exe`.
+4. Close the MOZA Cockpit window and start `VPforce-TelemFFB.exe`.
+
+## Build from source
+Requires Windows x64 and Python 3.12 (64-bit).
+```powershell
+git clone -b moza https://github.com/AlexZabol/VPforce-TelemFFB.git   # or download the "moza" branch as a zip
+cd VPforce-TelemFFB
+py -3.12 -m venv venv
+.\venv\Scripts\pip install -r requirements.txt pyinstaller
+.\venv\Scripts\pyinstaller --noconfirm VPforce-TelemFFB.spec
+```
+The program is in `dist\VPforce-TelemFFB\`; copy `MOZA_SDK.dll` (from the MOZA SDK) next to the exe.
+To run without building: `.\venv\Scripts\python main.py` with `MOZA_SDK.dll` placed in `dll\`.
+
 ## Updating
 `powershell -ExecutionPolicy Bypass -File moza/update_telemffb_moza.ps1`
