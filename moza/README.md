@@ -1,0 +1,31 @@
+# TelemFFB — MOZA flight base support (fork)
+
+This fork of [walmis/VPforce-TelemFFB](https://github.com/walmis/VPforce-TelemFFB) (GPL-3.0) adds a
+MOZA SDK backend so TelemFFB's telemetry effects play on MOZA flight bases (tested: AB9) — including
+the base's **Force Sensing** mode, where DirectInput effects are ignored.
+
+## Key finding
+The AB9 renders `MainCtrl_Ffb*` effects only while the host keeps reading the motor output torque
+(`MainGet_Steer_TorqueOutX`, MOZA SDK parameter id 95) — MOZA Cockpit polls it ~10x/s. Without the poll
+the base accepts every command and produces no force, in either mode.
+
+## Changes vs upstream
+- `telemffb/hw/ffb_moza.py` — `MozaFFBDevice(DInputFFBDevice)`: constant / ramp / periodic effects via
+  the MOZA SDK (slots 1–80, magnitude ×32767, direction in 1/100°), conditions/axes/buttons stay on
+  DirectInput; a keepalive thread polls the torque and refreshes playing effects every 100 ms.
+- `telemffb/hw/ffb_rhino.py` — `HapticEffect.open_dinput` picks the MOZA backend for VID 0x346E
+  (falls back to plain DirectInput if the SDK is unavailable; `TELEMFFB_MOZA_DISABLE=1` turns it off).
+- `main.py` — preloads the system `msvcp140*.dll` before PyQt6 (PyQt6's bundled 14.26 runtime crashes
+  `MOZA_SDK.dll`).
+- `.github/workflows/moza-build.yaml` — daily: merge upstream, test, build, release.
+- `moza/update_telemffb_moza.ps1` — local installer/updater.
+
+## Requirements
+- MOZA DeviceService (installed with MOZA Cockpit); the Cockpit **window** must be closed while TelemFFB runs.
+- DirectLink (TelemFFB's DirectInput bridge), as for any non-VPforce device.
+- `MOZA_SDK.dll` (x64) from the [MOZA SDK](https://mozaracing.com/pages/sdk). It is **not** included
+  here or in the releases (the SDK has no redistribution licence); the updater copies it from your own
+  SDK download.
+
+## Updating
+`powershell -ExecutionPolicy Bypass -File moza/update_telemffb_moza.ps1`

@@ -1559,7 +1559,17 @@ class HapticEffect(Destroyable):
         # local import: ffb_dinput imports the effect constants from this module
         from telemffb.hw.ffb_dinput import DInputFFBDevice
         logging.info(f"Open DirectInput FFB device {guid}")
-        cls.device = DInputFFBDevice(guid)
+        # MOZA flight bases: route telemetry effects through the MOZA SDK (works in the
+        # base's Force Sensing mode too); falls back to plain DirectInput when unavailable
+        moza = None
+        try:
+            from telemffb.hw import ffb_moza
+            info = next((d for d in DInputFFBDevice.enumerate() if d.guid == guid), None)
+            if info is not None and ffb_moza.is_moza_device(info):
+                moza = ffb_moza.open_moza_or_none(guid, info)
+        except Exception:
+            logging.exception("MOZA backend unavailable, using plain DirectInput")
+        cls.device = moza if moza is not None else DInputFFBDevice(guid)
         logging.info(f"Successfully opened '{cls.device.info.product_string}' ({cls.device.info.vidpid()})")
 
         return cls.device

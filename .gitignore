@@ -17,3 +17,8 @@ tools/scenarios/_active_scenario.txt
 userconfig_v2.xml
 userconfig.xml
 match_history.json
+
+# MOZA SDK runtime (no redistribution licence) - never commit
+dll/MOZA_SDK.dll
+MOZA_SDK.dll
+

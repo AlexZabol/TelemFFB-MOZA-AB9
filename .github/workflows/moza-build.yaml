@@ -1,0 +1,148 @@
+name: MOZA build (sync with upstream)
+
+# Daily (and on demand): merge the latest upstream TelemFFB (walmis/VPforce-TelemFFB, branch
+# "refactor") into this fork's "moza" branch in the runner, run the test suite, build the
+# Windows package and publish it as a GitHub release of this fork.
+#
+# The merge is NOT pushed back (GITHUB_TOKEN cannot push upstream workflow-file changes);
+# the moza branch is synced manually.  A merge conflict or failed tests fail the run, and
+# GitHub e-mails the repository owner.
+#
+# MOZA_SDK.dll is intentionally NOT part of the build: the MOZA SDK carries no
+# redistribution licence.  The local updater (moza/update_telemffb_moza.ps1) copies it in
+# from the user's own MOZA SDK download.
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Build even if a release for this upstream+moza combination exists'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: moza-build
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.merge.outputs.tag }}
+      upstream: ${{ steps.merge.outputs.upstream }}
+      moza: ${{ steps.merge.outputs.moza }}
+      skip: ${{ steps.merge.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: moza
+          fetch-depth: 0
+      - name: Merge latest upstream
+        id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          git config user.name "moza-build"
+          git config user.email "actions@users.noreply.github.com"
+          git remote add upstream https://github.com/walmis/VPforce-TelemFFB.git
+          git fetch --no-tags upstream refactor
+          UP=$(git rev-parse --short=8 upstream/refactor)
+          ME=$(git rev-parse --short=8 HEAD)
+          git merge --no-edit upstream/refactor
+          TAG="moza-${UP}-${ME}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "upstream=$UP" >> "$GITHUB_OUTPUT"
+          echo "moza=$ME" >> "$GITHUB_OUTPUT"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && [ "$FORCE" != "true" ]; then
+            echo "Release $TAG already exists - nothing new upstream."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  test:
+    needs: prepare
+    if: needs.prepare.outputs.skip == 'false'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: moza
+          fetch-depth: 0
+      - name: Merge latest upstream
+        shell: bash
+        run: |
+          git config user.name "moza-build"
+          git config user.email "actions@users.noreply.github.com"
+          git remote add upstream https://github.com/walmis/VPforce-TelemFFB.git
+          git fetch --no-tags upstream refactor
+          git merge --no-edit upstream/refactor
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+      - name: Run pytest
+        shell: pwsh
+        run: |
+          pytest -n auto
+          $code = $LASTEXITCODE
+          Write-Host ("pytest exit code: {0}" -f $code)
+          exit $code
+        env:
+          PYTHONFAULTHANDLER: "1"
+          PYTHONUNBUFFERED: "1"
+
+  build:
+    needs: [prepare, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: moza
+          fetch-depth: 0
+      - name: Merge latest upstream
+        run: |
+          git config user.name "moza-build"
+          git config user.email "actions@users.noreply.github.com"
+          git remote add upstream https://github.com/walmis/VPforce-TelemFFB.git
+          git fetch --no-tags upstream refactor
+          git merge --no-edit upstream/refactor
+      - name: Create Version file
+        run: |
+          echo "VERSION = \"${{ needs.prepare.outputs.tag }}\"" > version.py
+          echo "RELEASE = False" >> version.py
+      - name: Package Application
+        uses: walmis/pyinstaller-action-windows@py312
+        with:
+          path: .
+      - name: Make Zip
+        run: |
+          test ! -e dist/windows/VPforce-TelemFFB/MOZA_SDK.dll
+          cd dist/windows/VPforce-TelemFFB && zip -qr "../../../TelemFFB-MOZA-${{ needs.prepare.outputs.tag }}.zip" .
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ needs.prepare.outputs.tag }}"
+          cat > notes.md <<EOF
+          TelemFFB with the MOZA SDK backend (effects work in the MOZA base's Force Sensing mode).
+
+          - upstream walmis/VPforce-TelemFFB refactor: ${{ needs.prepare.outputs.upstream }}
+          - moza branch: ${{ needs.prepare.outputs.moza }}
+
+          MOZA_SDK.dll is not included (no redistribution licence). Install with
+          moza/update_telemffb_moza.ps1, which adds it from your own MOZA SDK download.
+          Licence: GPL-3.0 (see COPYING.txt); source: this repository, branch "moza".
+          EOF
+          gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" "TelemFFB-MOZA-$TAG.zip" --repo "$GITHUB_REPOSITORY" \
+             --target moza --title "TelemFFB MOZA $TAG" --notes-file notes.md --latest

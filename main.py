@@ -39,6 +39,19 @@ Application Flow:
 """
 
 import sys
+# MOZA SDK support: PyQt6 bundles an old msvcp140.dll (14.26) that crashes newer MSVC
+# binaries such as MOZA_SDK.dll (std::mutex ABI change).  Load the system's up-to-date
+# C++ runtime first so every module in the process shares it.  Must run before PyQt6.
+if sys.platform == "win32":
+    import ctypes as _ct
+    import os as _os
+    for _crt in ("msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll", "msvcp140_atomic_wait.dll"):
+        _p = _os.path.join(_os.environ.get("SystemRoot", r"C:\Windows"), "System32", _crt)
+        if _os.path.isfile(_p):
+            try:
+                _ct.WinDLL(_p)
+            except OSError:
+                pass
 # import faulthandler
 # faulthandler.enable()
 from PyQt6.QtGui import QIcon, QColor, QFont
