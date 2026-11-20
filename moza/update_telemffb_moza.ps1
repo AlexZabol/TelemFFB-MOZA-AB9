@@ -20,8 +20,10 @@ $ProgressPreference = "SilentlyContinue"
 $headers = @{ "User-Agent" = "telemffb-moza-updater" }
 
 Write-Host "Checking latest release of $Repo ..."
-$rels = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases?per_page=20" -Headers $headers
-$rel = $rels | Where-Object { $_.tag_name -like "v*" -and -not $_.draft } | Select-Object -First 1
+$rels = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases?per_page=100" -Headers $headers
+# highest vX.Y.N by version number (the API order is not guaranteed to be by version)
+$rel = $rels | Where-Object { $_.tag_name -match '^v\d+(\.\d+)+$' -and -not $_.draft } |
+       Sort-Object { [version]($_.tag_name.Substring(1)) } -Descending | Select-Object -First 1
 if (-not $rel) { throw "No TelemFFB MOZA release found in $Repo" }
 $asset = $rel.assets | Where-Object { $_.name -like "*.zip" } | Select-Object -First 1
 $tag = $rel.tag_name
