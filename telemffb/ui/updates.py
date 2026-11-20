@@ -59,6 +59,16 @@ def _version_tuple(version):
     return parts + (0,) * (4 - len(parts)) if parts else ()
 
 
+def is_moza_build() -> bool:
+    """True for builds of the MOZA fork (version.py VERSION starts with "MOZA"):
+    those must never auto-update to upstream TelemFFB."""
+    try:
+        import version
+        return str(getattr(version, "VERSION", "")).startswith("MOZA")
+    except Exception:
+        return False
+
+
 def directlink_update_available(installed, latest, ignored):
     """Whether the site's latest version should be offered: newer than the
     installed bridge, and not the version the user dismissed.  An unknown
@@ -98,6 +108,13 @@ class UpdateChecker(QObject):
         disabled for this build/instance, emit completion immediately so
         sim listeners (gated on version_check_complete) still start."""
         self._start_directlink_check()
+        if is_moza_build():
+            # MOZA fork: the official updater would replace this build with upstream
+            # TelemFFB (dropping the MOZA backend); updates come from the fork instead.
+            logging.info("MOZA build: official TelemFFB update check disabled "
+                         "(update with 'Обновить TelemFFB MOZA' / moza/update_telemffb_moza.ps1)")
+            self._emit_version_check_complete()
+            return
         if G.master_instance and not G.release_version and not (G.dev_build or G.beta_build) and getattr(sys, 'frozen', False):
             logging.info("Checking for version updates...")
             dlg = QProgressDialog("Checking for updates...", "Skip", 0, 0, self.mw)
@@ -277,7 +294,7 @@ class UpdateChecker(QObject):
 
     def perform_update(self, auto=True):
         mw = self.mw
-        if G.release_version:
+        if G.release_version or is_moza_build():
             return False
 
         ignore_auto_updates = G.system_settings.get('ignoreUpdate', False)

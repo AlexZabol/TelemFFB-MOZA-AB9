@@ -76,6 +76,16 @@ def test_start_stop_destroy_send_operations_and_free_slot():
 
 
 @pytest.mark.unit
+def test_moza_build_disables_official_updates(monkeypatch):
+    import types
+    from telemffb.ui import updates
+    monkeypatch.setitem(sys.modules, "version", types.SimpleNamespace(VERSION="MOZA 0.1.3 (TelemFFB 3.0.261019)"))
+    assert updates.is_moza_build()
+    monkeypatch.setitem(sys.modules, "version", types.SimpleNamespace(VERSION="3.0.261019"))
+    assert not updates.is_moza_build()
+
+
+@pytest.mark.unit
 def test_is_moza_device():
     info = MagicMock(vendor_id=0x346E)
     assert ffb_moza.is_moza_device(info)
