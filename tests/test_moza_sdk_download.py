@@ -164,6 +164,26 @@ def test_redirect_off_moza_hosts_is_refused_before_following():
                               "https://image.mozaracing.com/other/MOZA_SDK_1.0.0.6_en.zip") is not None
 
 
+def test_finished_download_is_installed_not_read_as_cancel(monkeypatch, tmp_path):
+    """Closing the finished progress dialog emits canceled(); that must not discard
+    the downloaded DLL (it did in the first live test)."""
+    import os
+    import sys
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication, QMessageBox
+    app = QApplication.instance() or QApplication(sys.argv)  # noqa: F841
+    from telemffb.ui.dialogs import moza_sdk_offer as offer
+    dll = _fake_dll()
+    monkeypatch.setitem(dl.KNOWN_SHA256, "1.0.0.6", __import__("hashlib").sha256(dll).hexdigest())
+    _serve(monkeypatch, tmp_path, dl.FALLBACK_URL, dll)
+    shown = []
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: shown.append(a[1])))
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: shown.append(a[1])))
+    assert offer._run_download(None)
+    assert (tmp_path / "MOZA_SDK.dll").read_bytes() == dll
+    assert shown == ["MOZA SDK installed"]
+
+
 def test_offer_only_for_moza_devices(monkeypatch):
     from types import SimpleNamespace as NS
     import telemffb.globals as G

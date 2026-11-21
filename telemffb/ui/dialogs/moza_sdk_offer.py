@@ -123,10 +123,14 @@ def _run_download(parent) -> bool:
     dlg.show()
     timer.start(100)
     loop.exec()
+    # QProgressDialog emits canceled() from close() as well: take the user's answer
+    # first and disconnect, so closing the finished dialog is never read as Cancel
+    user_cancelled = bool(state["cancel"])
+    dlg.canceled.disconnect()
     dlg.close()
 
     staged = state["staged"]
-    if state["cancel"] or isinstance(state["error"], dl.SdkCancelled):
+    if user_cancelled or isinstance(state["error"], dl.SdkCancelled):
         if staged is not None:
             staged.discard()            # cancelled at the very end: nothing is installed
         logging.info("MOZA SDK download cancelled by the user")
