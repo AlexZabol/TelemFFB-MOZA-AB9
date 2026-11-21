@@ -25,8 +25,9 @@ the base accepts every command and produces no force, in either mode.
 - MOZA DeviceService (installed with MOZA Cockpit); the Cockpit **window** must be closed while TelemFFB runs.
 - DirectLink (TelemFFB's DirectInput bridge), as for any non-VPforce device.
 - `MOZA_SDK.dll` (x64) from the [MOZA SDK](https://mozaracing.com/pages/sdk). It is **not** included
-  here or in the releases (the SDK has no redistribution licence); the updater copies it from your own
-  SDK download.
+  here or in the releases (the SDK has no redistribution licence). When it is missing, TelemFFB offers at
+  start to download the official Flight SDK from mozaracing.com (HTTPS, MOZA hosts only) and installs the
+  x64 `MOZA_SDK.dll` next to the exe; the updater script can also copy it from your own SDK download.
 
 ## Install (ready-made build)
 1. Install **MOZA Cockpit** (provides MOZA DeviceService) and **DirectLink** (TelemFFB's DirectInput bridge,
@@ -35,7 +36,7 @@ the base accepts every command and produces no force, in either mode.
 3. Either run `moza/update_telemffb_moza.ps1` (downloads the latest release to `C:\TelemFFB-MOZA` and adds
    `MOZA_SDK.dll` from the SDK zip in your Downloads folder), or by hand: download `TelemFFB-MOZA-x.y.z.zip`
    from [Releases](../../releases), unzip it anywhere, and copy `MOZA_SDK\x64-release\bin\MOZA_SDK.dll` from the
-   SDK zip next to `VPforce-TelemFFB.exe`.
+   SDK zip next to `VPforce-TelemFFB.exe` (or skip the SDK step and accept TelemFFB's download offer at start).
 4. Close the MOZA Cockpit window and start `VPforce-TelemFFB.exe`.
 
 ## Build from source

@@ -2086,6 +2086,15 @@ def main():
     # device opens, so the first effect created is already scaled
     G.effect_levels = EffectLevelsController()
 
+    # MOZA build: MOZA_SDK.dll cannot be shipped - offer to fetch it from MOZA's site
+    # before the device opens (the SDK backend is chosen when it does)
+    if G.master_instance and not headless_mode:
+        try:
+            from telemffb.ui.dialogs.moza_sdk_offer import offer_moza_sdk_download
+            offer_moza_sdk_download()
+        except Exception:
+            logging.exception("MOZA SDK download offer failed")
+
     # ============================================================================
     # PHASE 9: Device Connection and Firmware Validation
     # ============================================================================
