@@ -384,7 +384,11 @@ class MozaEffectHandle(ffb_backend.BaseEffectHandle):
     # -- parameters ---------------------------------------------------------------
     @staticmethod
     def _dir(direction_deg) -> int:
-        return int(round(direction_deg)) % 360 * 100
+        """TelemFFB / USB-PID / DirectInput direction (degrees, the direction the force
+        comes FROM) to MOZA's direction (1/100 degree, the direction the force pushes
+        TOWARD): rotate by 180 degrees.  Without it a constant force pushes the stick the
+        opposite way (e.g. elevator droop, direction 180, pulled the stick back)."""
+        return (int(round(direction_deg)) + 180) % 360 * 100
 
     def setEffect(self, **kwargs):
         # gain/duration of the Rhino SET_EFFECT report: duration is applied with the next

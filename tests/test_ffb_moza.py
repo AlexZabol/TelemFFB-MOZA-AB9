@@ -43,7 +43,7 @@ def test_periodic_maps_to_moza_units():
     assert vals[4] == 50
     assert vals[5] == ffb_moza.DURATION_INFINITE
     assert vals[6] == ffb_moza.AXIS_DIRECTION_ENABLE
-    assert vals[7] == 18000
+    assert vals[7] == 0       # PID "from" 180 -> MOZA "toward" 0
 
 
 @pytest.mark.unit
@@ -57,7 +57,7 @@ def test_constant_uses_flat_enable_axis_and_signed_magnitude():
     assert len(vals) == 8
     assert vals[1] == -round(0.5 * ffb_moza.FULL_SCALE)
     assert vals[3:6] == [0, 0, 1]
-    assert vals[6] == 9000
+    assert vals[6] == 27000   # PID 90 -> MOZA 270
 
 
 @pytest.mark.unit
@@ -128,3 +128,10 @@ def test_base_mode_only_for_ab9():
     assert ffb_moza.base_mode_supported(ab9)
     assert not ffb_moza.base_mode_supported(ab6)
     assert not ffb_moza.base_mode_supported(MagicMock(spec=[]))
+
+@pytest.mark.unit
+def test_direction_is_rotated_180_for_moza():
+    # elevator droop: TelemFFB constant(force, 180) must push the stick forward, as with DirectInput
+    assert ffb_moza.MozaEffectHandle._dir(180) == 0
+    assert ffb_moza.MozaEffectHandle._dir(0) == 18000
+    assert ffb_moza.MozaEffectHandle._dir(270) == 9000
