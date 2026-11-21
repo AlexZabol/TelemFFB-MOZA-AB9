@@ -82,6 +82,9 @@ DURATION_INFINITE = 65535
 SLOT_MIN, SLOT_MAX = 1, 80
 
 SDK_EFFECTS = set(PERIODIC_EFFECTS) | {EFFECT_CONSTANT, EFFECT_RAMP}
+# Moza_Initialize/Moza_Shutdown are process-wide: count the open MozaSdk users
+_SDK_INIT_LOCK = threading.Lock()
+_SDK_USERS = [0]
 KEEPALIVE_INTERVAL_S = 0.1
 
 
@@ -244,6 +247,7 @@ class MozaSdk:
         self._idle = threading.Condition(self._lock)
         self._inflight = 0
         self._h = None
+        self._closing_h = None
         self.device_name = ""
         # Route the SDK's own log to TelemFFB's log (warnings and errors only) instead of
         # its default per-command DEBUG output on the console.
@@ -266,6 +270,8 @@ class MozaSdk:
                 logging.warning(f"MOZA SDK: Moza_Initialize failed ({e}); is MOZA DeviceService installed "
                                 "and the MOZA Cockpit window closed?")
                 return False
+            with _SDK_INIT_LOCK:
+                _SDK_USERS[0] += 1
             t0 = time.monotonic()
             n = c_uint32(0)
             while time.monotonic() - t0 < timeout_s:   # enumeration is asynchronous
@@ -289,27 +295,46 @@ class MozaSdk:
                     want = f"346E:{product_id:04X}" if isinstance(product_id, int) else "unknown"
                     logging.warning(f"MOZA SDK: no single flight base matches the selected device ({want}); "
                                     f"found {found} - using plain DirectInput")
-                self._L.Moza_Shutdown()
+                self._release_sdk()
                 return False
             h = c_void_p()
             e = self._L.Moza_DeviceOpen(dev.id, byref(h))
             if e != _ERR_OK or not h.value:
                 logging.warning(f"MOZA SDK: Moza_DeviceOpen failed ({e})")
-                self._L.Moza_Shutdown()
+                self._release_sdk()
                 return False
             self._h = h.value
             self.device_name = dev.name.decode("utf-8", "replace")
             return True
 
-    def close(self):
+    def close(self, timeout: float = 5.0):
+        """Close the device and shut the SDK down - never while a native call is still
+        running: after ``timeout`` the close is left to the last call to finish."""
         with self._lock:
-            if self._h:
-                h, self._h = self._h, None          # no new call starts from here on
-                self._idle.wait_for(lambda: self._inflight == 0, timeout=5.0)
-                try:
-                    self._L.Moza_DeviceClose(h)
-                finally:
-                    self._L.Moza_Shutdown()
+            if not self._h:
+                return
+            h, self._h = self._h, None              # no new call starts from here on
+            self._closing_h = h
+            if not self._idle.wait_for(lambda: self._inflight == 0, timeout=timeout):
+                logging.warning("MOZA SDK: a call is still running; closing when it returns")
+                return
+            self._finish_close()
+
+    def _finish_close(self):                         # with _lock held, nothing in flight
+        h, self._closing_h = self._closing_h, None
+        if h:
+            try:
+                self._L.Moza_DeviceClose(h)
+            finally:
+                self._release_sdk()
+
+    def _release_sdk(self):
+        """Moza_Shutdown only when no other MozaSdk (e.g. after a device switch) still
+        uses the process-wide SDK."""
+        with _SDK_INIT_LOCK:
+            _SDK_USERS[0] = max(0, _SDK_USERS[0] - 1)
+            if _SDK_USERS[0] == 0:
+                self._L.Moza_Shutdown()
 
     def _begin_blocking(self):
         """Register a blocking call; returns the device handle, or None when closed."""
@@ -323,6 +348,8 @@ class MozaSdk:
         with self._lock:
             self._inflight -= 1
             self._idle.notify_all()
+            if self._inflight == 0 and self._closing_h is not None and self._h is None:
+                self._finish_close()                 # close() timed out waiting for us
 
     @property
     def is_open(self) -> bool:
@@ -596,6 +623,7 @@ class MozaFFBDevice(DInputFFBDevice):
         self._moza_handles: list = []
         self._slot_lock = threading.Lock()
         self.fx_lock = threading.RLock()     # serialises effect sends, stop/free and reset
+        self._resetting = 0                  # > 0 while the base's effects are being reset
         self._keepalive_stop = threading.Event()
         self.connection_generation = 0       # +1 on every DirectInput re-open
         self._mode_req_lock = threading.Lock()
@@ -647,6 +675,10 @@ class MozaFFBDevice(DInputFFBDevice):
         with self.fx_lock:
             if type not in SDK_EFFECTS or not self._use_sdk_effects():
                 return super().create_effect(type)          # conditions, and everything in FFB mode
+            if self._resetting:
+                # the base is being reset: defer (HapticEffect keeps its pending creation
+                # and retries on the next frame) instead of waiting for the reset
+                return None
             slot = self._take_slot()
             if slot is None:
                 logging.warning(f"MOZA: effect slots exhausted, cannot create {effect_names.get(type, type)}")
@@ -674,10 +706,16 @@ class MozaFFBDevice(DInputFFBDevice):
         return alive
 
     def reset_effects(self):
+        # Only the bookkeeping runs under fx_lock; the three synchronous control commands
+        # run outside it, so telemetry frames never wait for the base.  While they run,
+        # new SDK effects are deferred (create_effect returns None) and the invalidated
+        # handles send nothing.
         with self.fx_lock:
+            self._resetting += 1
             super().reset_effects()
             for h in self._live_moza_handles():
                 h.invalidate()
+        try:
             e, _ = self.sdk.send(CMD_CONTROL, [("i", 2)], sync=True)
             if e == _ERR_OK:
                 with self._slot_lock:       # the base freed every effect: all slots are free
@@ -689,6 +727,9 @@ class MozaFFBDevice(DInputFFBDevice):
                                 f"{len(self._free_slots)} effect slots stay available")
             self.sdk.send(CMD_CONTROL, [("i", 1)], sync=True)
             self.sdk.send(CMD_CONTROL, [("i", 3)], sync=True)
+        finally:
+            with self.fx_lock:
+                self._resetting -= 1
 
     # -- base mode -------------------------------------------------------------------
     def set_base_mode(self, mode: str) -> bool:

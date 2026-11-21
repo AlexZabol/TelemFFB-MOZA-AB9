@@ -1,5 +1,6 @@
 """Start-up offer to download MOZA_SDK.dll from mozaracing.com when it is missing."""
 import logging
+import os
 import threading
 
 from PyQt6.QtCore import QEventLoop, QTimer, Qt
@@ -12,12 +13,34 @@ from telemffb.utils import moza_sdk_download as dl
 NO_PROMPT_KEY = "mozaSdkNoPrompt"
 
 
+def moza_sdk_wanted() -> bool:
+    """Whether this instance would use the MOZA SDK: the backend is not disabled and
+    the configured device - or, with none configured yet, a connected device - is a
+    MOZA DirectInput device."""
+    if os.environ.get("TELEMFFB_MOZA_DISABLE"):
+        return False
+    guid = getattr(G, "device_di_guid", None)
+    if not guid and getattr(G, "device_usbpid", None):
+        return False                        # a configured HID (VPforce) device
+    try:
+        from telemffb.hw.ffb_dinput import DInputFFBDevice
+        devices = list(DInputFFBDevice.enumerate())
+    except Exception:
+        logging.debug("MOZA SDK offer: DirectInput enumeration failed", exc_info=True)
+        return False
+    if guid:
+        return any(d.guid == guid and ffb_moza.is_moza_device(d) for d in devices)
+    return any(ffb_moza.is_moza_device(d) for d in devices)
+
+
 def offer_moza_sdk_download(parent=None) -> bool:
-    """When MOZA_SDK.dll is missing, ask the user whether to download it from MOZA's
-    website and, on yes, install it.  Returns True when the DLL is present afterwards.
-    Runs on the main thread before the device is opened."""
+    """When MOZA_SDK.dll is missing and a MOZA base is in use, ask whether to download
+    it from MOZA's website and, on yes, install it.  Returns True when the DLL is
+    present afterwards.  Runs on the main thread before the device is opened."""
     if ffb_moza.sdk_dll_path():
         return True
+    if not moza_sdk_wanted():
+        return False
     settings = getattr(G, "system_settings", None)
     if settings is not None and settings.get(NO_PROMPT_KEY, False):
         logging.info("MOZA_SDK.dll missing; download offer switched off by the user")
@@ -37,8 +60,7 @@ def offer_moza_sdk_download(parent=None) -> bool:
     box.setDefaultButton(QMessageBox.StandardButton.Yes)
     dont_ask = QCheckBox("Don't ask again")
     box.setCheckBox(dont_ask)
-    answer = box.exec()
-    if answer != QMessageBox.StandardButton.Yes:
+    if box.exec() != QMessageBox.StandardButton.Yes:
         if dont_ask.isChecked() and settings is not None:
             settings.setValue(NO_PROMPT_KEY, True)
         logging.info("MOZA_SDK.dll missing; the user declined the download")
@@ -46,13 +68,26 @@ def offer_moza_sdk_download(parent=None) -> bool:
     return _run_download(parent)
 
 
+def _confirm_unverified(parent, staged: "dl.StagedSdk") -> bool:
+    """A newer SDK without a known checksum: install only on explicit confirmation."""
+    ans = QMessageBox.question(
+        parent, "New MOZA SDK version",
+        f"MOZA offers SDK version {staged.version or 'unknown'}, which TelemFFB MOZA has not "
+        "verified yet.\n\n"
+        "It was downloaded from mozaracing.com over a verified HTTPS connection and is a "
+        f"64-bit Windows DLL.\nSHA-256: {staged.sha256}\n\n"
+        "Install it?",
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+    return ans == QMessageBox.StandardButton.Yes
+
+
 def _run_download(parent) -> bool:
     state = {"got": 0, "total": 0, "status": "Starting...", "done": False, "error": None,
-             "cancel": False, "path": None}
+             "cancel": False, "staged": None}
 
     def work():
         try:
-            state["path"] = dl.install_sdk(
+            state["staged"] = dl.fetch_sdk(
                 progress=lambda got, total: state.update(got=got, total=total),
                 cancelled=lambda: state["cancel"],
                 status=lambda s: state.update(status=s))
@@ -90,14 +125,27 @@ def _run_download(parent) -> bool:
     loop.exec()
     dlg.close()
 
-    err = state["error"]
-    if err is None and state["path"]:
-        QMessageBox.information(parent, "MOZA SDK installed",
-                                f"MOZA_SDK.dll was installed to:\n{state['path']}")
-        return True
-    if state["cancel"]:
+    staged = state["staged"]
+    if state["cancel"] or isinstance(state["error"], dl.SdkCancelled):
+        if staged is not None:
+            staged.discard()            # cancelled at the very end: nothing is installed
         logging.info("MOZA SDK download cancelled by the user")
         return False
+    if staged is not None:
+        if not staged.verified and not _confirm_unverified(parent, staged):
+            staged.discard()
+            logging.info(f"MOZA SDK {staged.version}: unverified DLL declined by the user")
+            return False
+        try:
+            path = dl.install_staged(staged)
+        except OSError as e:
+            staged.discard()
+            state["error"] = e
+        else:
+            QMessageBox.information(parent, "MOZA SDK installed",
+                                    f"MOZA_SDK.dll was installed to:\n{path}")
+            return True
+    err = state["error"]
     logging.error(f"MOZA SDK download failed: {err}")
     QMessageBox.warning(parent, "MOZA SDK download failed",
                         f"MOZA_SDK.dll could not be installed:\n\n{err}\n\n"

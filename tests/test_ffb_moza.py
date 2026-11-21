@@ -126,6 +126,7 @@ def _moza_device(sdk, base_mode="FFB"):
     dev._moza_handles = []
     dev._slot_lock = threading.Lock()
     dev.fx_lock = threading.RLock()
+    dev._resetting = 0
     dev.reset_effects = MagicMock()
     dev.connection_generation = 0
     dev._mode_req_lock = threading.Lock()
@@ -456,6 +457,88 @@ def test_two_bases_of_one_model_stay_on_directinput(monkeypatch):
 
 
 @pytest.mark.unit
+def test_effect_creation_does_not_wait_for_a_running_reset():
+    import threading
+    sdk = _ParamSdk()
+    dev = _moza_device(sdk, base_mode="FS")
+    del dev.reset_effects
+    from telemffb.hw.ffb_dinput import DInputFFBDevice
+    import unittest.mock as um
+    in_reset, go_on = threading.Event(), threading.Event()
+
+    def send(cmd, specs, sync=False, timeout_ms=1000):
+        if cmd == ffb_moza.CMD_CONTROL and specs == [("i", 2)]:
+            in_reset.set()
+            go_on.wait(5)
+        return 0, (specs[1][1] if cmd == ffb_moza.CMD_NEW_EFFECT else None)
+    sdk.send = send
+    with um.patch.object(DInputFFBDevice, "reset_effects"):
+        r = threading.Thread(target=dev.reset_effects)
+        r.start()
+        assert in_reset.wait(2)
+        got = []
+        c = threading.Thread(target=lambda: got.append(dev.create_effect(EFFECT_SINE)))
+        c.start()
+        c.join(0.5)
+        assert got == [None]                    # deferred at once, not blocked
+        go_on.set()
+        r.join(2)
+    h = dev.create_effect(EFFECT_SINE)          # after the reset: created normally
+    assert h and h.effect_id == 1
+    h.effect_id = None
+
+
+def _bare_sdk():
+    import threading
+    sdk = ffb_moza.MozaSdk.__new__(ffb_moza.MozaSdk)
+    sdk._lock = threading.RLock()
+    sdk._idle = threading.Condition(sdk._lock)
+    sdk._inflight = 0
+    sdk._h = 1
+    sdk._closing_h = None
+    sdk._L = MagicMock()
+    sdk._L.Moza_DeviceCommandSend.return_value = 0
+    sdk._L.Moza_ValueCreate.return_value = 1
+    return sdk
+
+
+@pytest.mark.unit
+def test_close_never_runs_while_a_native_call_is_in_flight(monkeypatch):
+    import threading
+    monkeypatch.setattr(ffb_moza, "_SDK_USERS", [1])
+    sdk = _bare_sdk()
+    entered, release = threading.Event(), threading.Event()
+
+    def fetch_sync(h, pid, timeout, v):
+        entered.set()
+        release.wait(5)
+        return -1
+    sdk._L.Moza_DeviceParameterFetchSync.side_effect = fetch_sync
+    t = threading.Thread(target=lambda: sdk.get_param_int(95))
+    t.start()
+    assert entered.wait(2)
+    sdk.close(timeout=0.1)                      # times out: must not close yet
+    sdk._L.Moza_DeviceClose.assert_not_called()
+    sdk._L.Moza_Shutdown.assert_not_called()
+    release.set()
+    t.join(2)                                   # the last call to finish closes
+    sdk._L.Moza_DeviceClose.assert_called_once_with(1)
+    sdk._L.Moza_Shutdown.assert_called_once()
+
+
+@pytest.mark.unit
+def test_sdk_shutdown_only_with_the_last_user(monkeypatch):
+    monkeypatch.setattr(ffb_moza, "_SDK_USERS", [2])     # an old and a new device
+    a = _bare_sdk()
+    a.close()
+    a._L.Moza_DeviceClose.assert_called_once()
+    a._L.Moza_Shutdown.assert_not_called()
+    b = _bare_sdk()
+    b.close()
+    b._L.Moza_Shutdown.assert_called_once()
+
+
+@pytest.mark.unit
 def test_blocking_sdk_calls_do_not_hold_the_send_lock():
     import threading
     sdk = ffb_moza.MozaSdk.__new__(ffb_moza.MozaSdk)
@@ -463,6 +546,7 @@ def test_blocking_sdk_calls_do_not_hold_the_send_lock():
     sdk._idle = threading.Condition(sdk._lock)
     sdk._inflight = 0
     sdk._h = 1
+    sdk._closing_h = None
     entered, release = threading.Event(), threading.Event()
 
     def fetch_sync(h, pid, timeout, v):
