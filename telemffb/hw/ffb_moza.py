@@ -128,6 +128,11 @@ def _sdk_log(ctx_ptr, _user):
         if c.level < _SDK_LOG_WARNING:
             return
         msg = ctypes.string_at(c.message, c.messageSize).decode("utf-8", "replace") if c.message else ""
+        if "MsgType" in msg and "未处理" in msg:
+            # "unhandled message type": periodic service status messages this SDK version
+            # (1.0.0.6) does not know (DeviceService 1.1.x sends them every ~3 s) - harmless
+            logging.debug(f"MOZA SDK: {msg}")
+            return
         logging.warning(f"MOZA SDK: {msg}")
     except Exception:
         pass
