@@ -729,7 +729,10 @@ class MozaFFBDevice(DInputFFBDevice):
                 alive.append(h)
         return alive
 
-    def reset_effects(self):
+    def reset_effects(self) -> bool:
+        """Drop every effect on both channels.  Returns True when the base confirmed the
+        SDK reset and the restart of its effect calculation; raises what the DirectInput
+        reset raised (after the SDK side was reset anyway)."""
         # Only the bookkeeping runs under fx_lock; the three synchronous control commands
         # run outside it, so telemetry frames never wait for the base.  While they run,
         # new SDK effects are deferred (create_effect returns None) and the invalidated
@@ -745,14 +748,16 @@ class MozaFFBDevice(DInputFFBDevice):
                     super().reset_effects()
                 except Exception as ex:     # DirectInput failed: still reset the SDK side,
                     dinput_error = ex       # then report it to the caller as before
-                    # its handles may not have been invalidated before the failure: do it
-                    # so their owners re-create them (on the current channel)
+                    # some native effects may not have been freed: use DirectInput's own
+                    # recovery - invalidate every handle (their owners re-create them on
+                    # the current channel) and re-open the device, which frees them all
                     try:
-                        self._invalidate_effects()
+                        self._note_native_fault("reset_effects")
                     except Exception:
-                        logging.exception("MOZA: invalidating DirectInput effects failed")
+                        logging.exception("MOZA: DirectInput recovery request failed")
             e, _ = self.sdk.send(CMD_CONTROL, [("i", 2)], sync=True)
-            if e == _ERR_OK:
+            ok = e == _ERR_OK
+            if ok:
                 with self._slot_lock:       # the base freed every effect: all slots are free
                     self._free_slots = set(range(SLOT_MIN, SLOT_MAX + 1))
             else:
@@ -760,13 +765,17 @@ class MozaFFBDevice(DInputFFBDevice):
                 # base, so they stay out of the pool until a reset succeeds
                 logging.warning(f"MOZA: effect reset not confirmed (err {e}); "
                                 f"{len(self._free_slots)} effect slots stay available")
-            self.sdk.send(CMD_CONTROL, [("i", 1)], sync=True)
+            e1, _ = self.sdk.send(CMD_CONTROL, [("i", 1)], sync=True)   # restart calculation
             self.sdk.send(CMD_CONTROL, [("i", 3)], sync=True)
+            if e1 != _ERR_OK:
+                logging.warning(f"MOZA: restarting the effect calculation not confirmed (err {e1})")
+                ok = False
         finally:
             with self.fx_lock:
                 self._resetting -= 1
         if dinput_error is not None:
             raise dinput_error
+        return ok
 
     # -- base mode -------------------------------------------------------------------
     def set_base_mode(self, mode: str) -> bool:
@@ -846,12 +855,14 @@ class MozaFFBDevice(DInputFFBDevice):
             if req is None and not refresh:
                 return
             if refresh:
-                moved = True
+                # done only when the mode was read, the effects follow it and the FFB
+                # source is confirmed; anything else is retried shortly
+                moved = False
                 try:
                     mode = self._read_base_mode()
                     if mode is not None:
                         moved = self._follow_base_mode(mode)
-                    self.ensure_telemetry_ffb_source()
+                    moved = self.ensure_telemetry_ffb_source() and moved
                 except Exception:
                     logging.exception("MOZA: refreshing the base state after reconnect failed")
                 self._refresh_retries = 0 if moved else self._refresh_retries + 1
@@ -900,9 +911,13 @@ class MozaFFBDevice(DInputFFBDevice):
         # move the effects to the other channel: drop every device effect; their
         # HapticEffect owners re-create them (now on the new channel) on next start
         try:
-            self.reset_effects()
+            reset_ok = self.reset_effects()
         except Exception:
             logging.exception(f"MOZA: moving the effects to {self._channel_name()} failed; will retry")
+            return False
+        if reset_ok is False:
+            logging.warning(f"MOZA: the base did not confirm the effect reset for the move to "
+                            f"{self._channel_name()}; will retry")
             return False
         self._migration_pending = False
         logging.info(f"MOZA: effects now via {self._channel_name()}")

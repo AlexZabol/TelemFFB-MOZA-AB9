@@ -561,7 +561,7 @@ def test_failed_effect_move_is_not_confirmed_and_retried(monkeypatch):
     monkeypatch.setattr(ffb_moza.time, "sleep", lambda s: None)
     sdk = _ParamSdk()
     dev = _moza_device(sdk, base_mode="FFB")
-    dev.reset_effects = MagicMock(side_effect=[OSError("effect_destroy"), None])
+    dev.reset_effects = MagicMock(side_effect=[OSError("effect_destroy"), True])
     assert not dev.set_base_mode("FS")          # base switched, effects not moved: not done
     assert dev._migration_pending
     assert dev.set_base_mode("FS")              # retry repeats the move
@@ -571,17 +571,69 @@ def test_failed_effect_move_is_not_confirmed_and_retried(monkeypatch):
 
 
 @pytest.mark.unit
-def test_directinput_reset_failure_invalidates_its_effects():
+def test_directinput_reset_failure_uses_directinput_recovery():
     sdk = _ParamSdk()
     dev = _moza_device(sdk, base_mode="FFB")
     del dev.reset_effects
-    dev._invalidate_effects = MagicMock()
+    dev._effect_handles = []
+    dev._native_fault = False
+    dev._reconnecting = False
+    dev._reconnect_requested = False
     from telemffb.hw.ffb_dinput import DInputFFBDevice
     import unittest.mock as um
     with um.patch.object(DInputFFBDevice, "reset_effects", side_effect=OSError("effect_destroy")):
         with pytest.raises(OSError):
             dev.reset_effects()
-    dev._invalidate_effects.assert_called_once()   # owners re-create on the current channel
+    # handles invalidated and a device re-open requested: the re-open frees every
+    # native effect, also the one whose destroy failed
+    assert dev._native_fault and dev._reconnect_requested
+
+
+@pytest.mark.unit
+def test_unconfirmed_sdk_reset_keeps_the_move_pending(monkeypatch):
+    monkeypatch.setattr(ffb_moza.time, "sleep", lambda s: None)
+    sdk = _ParamSdk()
+    dev = _moza_device(sdk, base_mode="FFB")
+    del dev.reset_effects
+    from telemffb.hw.ffb_dinput import DInputFFBDevice
+    import unittest.mock as um
+    real_send = sdk.send
+    fail = [True]
+    sdk.send = lambda cmd, specs, sync=False, timeout_ms=1000: (
+        (-1, None) if fail[0] and cmd == ffb_moza.CMD_CONTROL and specs == [("i", 2)]
+        else real_send(cmd, specs, sync, timeout_ms))
+    with um.patch.object(DInputFFBDevice, "reset_effects"):
+        assert not dev.set_base_mode("FS")       # base did not confirm the reset
+        assert dev._migration_pending
+        fail[0] = False
+        assert dev.set_base_mode("FS")
+        assert not dev._migration_pending
+
+
+@pytest.mark.unit
+def test_reconnect_refresh_retries_after_a_failed_read(monkeypatch):
+    from telemffb.hw.ffb_dinput import DInputFFBDevice
+    monkeypatch.setattr(ffb_moza.time, "sleep", lambda s: None)
+    sdk = _ParamSdk()
+    sdk.params[ffb_moza.PARAM_STEER_FORCE_MODE] = 1
+    reads = []
+    real_get = sdk.get_param_int
+
+    def flaky(pid, timeout_ms=2000):
+        if pid == ffb_moza.PARAM_STEER_FORCE_MODE:
+            reads.append(pid)
+            if len(reads) <= 4:                  # the whole first read attempt fails
+                return None
+        return real_get(pid, timeout_ms)
+    sdk.get_param_int = flaky
+    dev = _moza_device(sdk, base_mode="FFB")
+    dev._reconnecting, dev._shutdown = False, False
+    dev._keepalive_stop.wait = lambda t: False   # no 1 s pause in the test
+    monkeypatch.setattr(DInputFFBDevice, "_try_reconnect", lambda self: None)
+    dev._try_reconnect()
+    dev._mode_worker.join(5)
+    assert len(reads) > 4                        # read again after the failure
+    assert dev._base_mode == "FS"
 
 
 @pytest.mark.unit
