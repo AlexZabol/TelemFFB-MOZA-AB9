@@ -167,6 +167,10 @@ jobs:
           test -n "$OUT"
           test ! -e "$OUT/MOZA_SDK.dll"
           cp moza/INSTALL.txt moza/add_moza_sdk.ps1 "$OUT/"
+          # every file of the build: the updater refuses a package missing any of them
+          (cd "$OUT" && find . -type f | sed 's|^\./||' | sort > ../_package_files.txt) && mv "$OUT/../_package_files.txt" "$OUT/assets/_package_files.txt"
+          test -s "$OUT/assets/_package_files.txt"
+          grep -qx 'assets/hidapi.dll' "$OUT/assets/_package_files.txt"
           7z a -tzip "TelemFFB-MOZA-${{ needs.prepare.outputs.version }}.zip" "./$OUT/*" > /dev/null
       - name: Publish release
         env:

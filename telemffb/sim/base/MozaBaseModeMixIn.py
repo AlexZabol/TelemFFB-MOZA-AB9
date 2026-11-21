@@ -31,7 +31,9 @@ class MozaBaseModeMixIn(AircraftEffectUtilsBase):
         self._moza_retry_at: float = 0.0
         self._moza_pending = None         # mode requested, result not yet in
 
-    def _moza_done(self, mode, ok):       # called on the device's worker thread
+    def _moza_done(self, token, mode, ok):    # called on the device's worker thread
+        if self._moza_pending is not token:
+            return      # a stale answer (older request, or a replaced/re-opened device)
         if ok:
             logging.info(f"MOZA: base mode set to {'Force Sensing' if mode == 'FS' else 'Force Feedback'}")
             self._moza_mode_applied = mode
@@ -49,6 +51,7 @@ class MozaBaseModeMixIn(AircraftEffectUtilsBase):
             self._moza_generation = gen
             self._moza_mode_applied = "KEEP"
             self._moza_retry_at = 0.0
+            self._moza_pending = None             # an answer still in flight no longer counts
         if mode == "KEEP":
             self._moza_mode_applied = "KEEP"
             return
@@ -58,12 +61,13 @@ class MozaBaseModeMixIn(AircraftEffectUtilsBase):
             return                                # not (yet) a connected MOZA AB9
         if time.monotonic() < self._moza_retry_at:
             return
-        self._moza_pending = mode
+        token = object()                          # identifies this request's answer
+        self._moza_pending = token
         try:
-            dev.request_base_mode(mode, self._moza_done)
+            dev.request_base_mode(mode, lambda m, ok: self._moza_done(token, m, ok))
         except Exception:
             logging.exception("MOZA: base mode switch failed")
-            self._moza_done(mode, False)
+            self._moza_done(token, mode, False)
 
     @override
     def on_telemetry(self, telem_data: BaseTelemetryData):

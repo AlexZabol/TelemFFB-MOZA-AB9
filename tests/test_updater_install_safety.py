@@ -29,7 +29,21 @@ def _zip(path, names):
 
 
 FULL = [EXECUTABLE_NAME, "assets/base_library.zip", "assets/defaults.xml", "assets/python312.dll",
-        "assets/a.dll"]
+        "assets/hidapi.dll", "assets/a.dll"]
+
+
+def test_package_manifest_is_enforced(tmp_path):
+    manifest = "\n".join(FULL + ["assets/b.pyd"])
+    p = tmp_path / "u.zip"
+    with zipfile.ZipFile(p, "w") as zf:
+        for n in FULL:
+            zf.writestr(n, "x")
+        zf.writestr(updater.PACKAGE_MANIFEST, manifest)
+    with pytest.raises(RuntimeError, match="assets/b.pyd"):
+        _worker(tmp_path)._validate_zip(str(p))
+    with zipfile.ZipFile(p, "a") as zf:
+        zf.writestr("assets/b.pyd", "x")
+    _worker(tmp_path)._validate_zip(str(p))
 
 
 def test_valid_package_passes(tmp_path):
@@ -37,7 +51,7 @@ def test_valid_package_passes(tmp_path):
 
 
 @pytest.mark.parametrize("drop", [EXECUTABLE_NAME, "assets/base_library.zip", "assets/defaults.xml",
-                                  "assets/python312.dll"])
+                                  "assets/python312.dll", "assets/hidapi.dll"])
 def test_incomplete_package_is_rejected(tmp_path, drop):
     with pytest.raises(RuntimeError, match="incomplete"):
         _worker(tmp_path)._validate_zip(_zip(tmp_path / "u.zip", [n for n in FULL if n != drop]))

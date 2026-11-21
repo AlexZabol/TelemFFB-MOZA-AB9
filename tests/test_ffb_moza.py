@@ -128,6 +128,11 @@ def _moza_device(sdk, base_mode="FFB"):
     dev.fx_lock = threading.RLock()
     dev.reset_effects = MagicMock()
     dev.connection_generation = 0
+    dev._mode_req_lock = threading.Lock()
+    dev._mode_req = None
+    dev._refresh_req = False
+    dev._mode_worker = None
+    dev._keepalive_stop = threading.Event()
     return dev
 
 
@@ -382,8 +387,110 @@ def test_reconnect_refreshes_mode_and_bumps_generation(monkeypatch):
     monkeypatch.setattr(DInputFFBDevice, "_try_reconnect", lambda self: None)
     dev._try_reconnect()
     assert dev.connection_generation == 1
+    dev._mode_worker.join(5)                    # the re-read runs on the worker thread
     assert dev._base_mode == "FS"
     dev.reset_effects.assert_called_once()
+
+
+@pytest.mark.unit
+def test_superseded_mode_request_gets_an_answer():
+    import threading
+    sdk = _ParamSdk()
+    dev = _moza_device(sdk)
+    gate, running = threading.Event(), threading.Event()
+    real = dev.set_base_mode
+    dev.set_base_mode = lambda m: (running.set(), gate.wait(5), real(m))[2]
+    results = []
+    dev.request_base_mode("FS", lambda m, ok: results.append(("first", m, ok)))   # running
+    assert running.wait(5)
+    dev.request_base_mode("FFB", lambda m, ok: results.append(("second", m, ok)))  # pending
+    dev.request_base_mode("FS", lambda m, ok: results.append(("third", m, ok)))    # supersedes it
+    assert ("second", "FFB", False) in results
+    gate.set()
+    dev._mode_worker.join(5)
+    assert [r[0] for r in results] == ["second", "first", "third"]
+    assert results[1][2] and results[2][2]
+
+
+@pytest.mark.unit
+def test_mixin_ignores_stale_answer_and_retries_after_failure(monkeypatch):
+    dev = _ab9(connected=True)
+    answers = []
+    dev.request_base_mode.side_effect = lambda mode, cb: answers.append(cb)
+    m = _mixin(monkeypatch, dev)
+    m.moza_base_mode = "FS"
+    m._apply_moza_base_mode()
+    assert len(answers) == 1
+    dev.connection_generation += 1              # re-opened while the request was in flight
+    m._apply_moza_base_mode()
+    assert len(answers) == 2
+    answers[0]("FS", True)                      # stale: ignored
+    assert m._moza_mode_applied == "KEEP" and m._moza_pending is not None
+    answers[1]("FS", False)                     # superseded / failed: retry later
+    assert m._moza_pending is None and m._moza_retry_at > 0
+
+
+@pytest.mark.unit
+def test_failed_reset_keeps_held_slots_out_of_pool():
+    sdk = _ParamSdk()
+    dev = _moza_device(sdk, base_mode="FS")
+    del dev.reset_effects
+    from telemffb.hw.ffb_dinput import DInputFFBDevice
+    import unittest.mock as um
+    dev._free_slots = set(range(3, 81))         # slots 1, 2 held on the base
+    sdk.send = lambda cmd, specs, sync=False, timeout_ms=1000: (-1, None)
+    with um.patch.object(DInputFFBDevice, "reset_effects"):
+        dev.reset_effects()
+    assert 1 not in dev._free_slots and 2 not in dev._free_slots
+
+
+@pytest.mark.unit
+def test_two_bases_of_one_model_stay_on_directinput(monkeypatch):
+    from types import SimpleNamespace as NS
+    a = NS(vendor_id=0x346E, product_id=0x1000, guid="a")
+    b = NS(vendor_id=0x346E, product_id=0x1000, guid="b")
+    other = NS(vendor_id=0x346E, product_id=0x1001, guid="c")
+    assert ffb_moza.same_model_count(a, [a, b, other]) == 2
+    monkeypatch.setattr(ffb_moza, "sdk_dll_path", lambda: pytest.fail("SDK must not be opened"))
+    assert ffb_moza.open_moza_or_none("a", a, [a, b, other]) is None
+
+
+@pytest.mark.unit
+def test_blocking_sdk_calls_do_not_hold_the_send_lock():
+    import threading
+    sdk = ffb_moza.MozaSdk.__new__(ffb_moza.MozaSdk)
+    sdk._lock = threading.RLock()
+    sdk._idle = threading.Condition(sdk._lock)
+    sdk._inflight = 0
+    sdk._h = 1
+    entered, release = threading.Event(), threading.Event()
+
+    def fetch_sync(h, pid, timeout, v):
+        entered.set()
+        release.wait(5)
+        return -1
+    sdk._L = MagicMock()
+    sdk._L.Moza_DeviceParameterFetchSync.side_effect = fetch_sync
+    sdk._L.Moza_DeviceCommandSend.return_value = 0
+    sdk._L.Moza_ValueCreate.return_value = 1
+    t = threading.Thread(target=lambda: sdk.get_param_int(95))
+    t.start()
+    assert entered.wait(2)
+    got = []
+    s = threading.Thread(target=lambda: got.append(sdk.poll_torque()))
+    s.start()
+    s.join(1)
+    assert got, "an effect-path call waited for the blocking read"
+    # close waits for the in-flight read before closing the device
+    c = threading.Thread(target=sdk.close)
+    c.start()
+    c.join(0.2)
+    assert c.is_alive()
+    release.set()
+    t.join(2)
+    c.join(2)
+    assert not c.is_alive()
+    sdk._L.Moza_DeviceClose.assert_called_once_with(1)
 
 
 @pytest.mark.unit

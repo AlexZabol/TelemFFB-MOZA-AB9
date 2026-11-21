@@ -231,12 +231,18 @@ class MozaSdk:
                 ("Moza_DeviceParameterFetch", c_int32, [c_void_p, c_int32]),
                 ("Moza_DeviceParameterSetValue", c_int32, [c_void_p, c_int32, pV]),
                 ("Moza_DeviceParameterGetValueSync", c_int32, [c_void_p, c_int32, c_int32, pV]),
+                ("Moza_DeviceParameterFetchSync", c_int32, [c_void_p, c_int32, c_int32, pV]),
                 ("Moza_DeviceCommandSend", c_int32, [c_void_p, c_int32, pV]),
                 ("Moza_DeviceCommandSendSync", c_int32, [c_void_p, c_int32, pV, c_int32, pV])):
             fn = getattr(L, name)
             fn.restype = res
             fn.argtypes = args
+        # _lock serialises the short non-blocking calls (their order on the wire matters).
+        # Blocking calls (…Sync) run outside it, so a slow reply never holds up effect
+        # sends; close() waits until none is in flight.
         self._lock = threading.RLock()
+        self._idle = threading.Condition(self._lock)
+        self._inflight = 0
         self._h = None
         self.device_name = ""
         # Route the SDK's own log to TelemFFB's log (warnings and errors only) instead of
@@ -298,11 +304,25 @@ class MozaSdk:
     def close(self):
         with self._lock:
             if self._h:
+                h, self._h = self._h, None          # no new call starts from here on
+                self._idle.wait_for(lambda: self._inflight == 0, timeout=5.0)
                 try:
-                    self._L.Moza_DeviceClose(self._h)
+                    self._L.Moza_DeviceClose(h)
                 finally:
-                    self._h = None
                     self._L.Moza_Shutdown()
+
+    def _begin_blocking(self):
+        """Register a blocking call; returns the device handle, or None when closed."""
+        with self._lock:
+            if not self._h:
+                return None
+            self._inflight += 1
+            return self._h
+
+    def _end_blocking(self):
+        with self._lock:
+            self._inflight -= 1
+            self._idle.notify_all()
 
     @property
     def is_open(self) -> bool:
@@ -325,27 +345,37 @@ class MozaSdk:
                 self._fill(_Value.from_address(base + _VALUE_SIZE * i), sub)
 
     def send(self, cmd: int, specs, sync: bool = False, timeout_ms: int = 1000):
-        """Send a command; returns (err, reply-scalar-or-None)."""
-        with self._lock:
-            if not self._h:
-                return -1, None
-            args, res = _Value(), _Value()
-            try:
-                self._fill(args, ("list", specs))
-                if not sync:
+        """Send a command; returns (err, reply-scalar-or-None).  An asynchronous send is
+        serialised with the other short calls; a synchronous one waits outside the lock."""
+        if not sync:
+            with self._lock:
+                if not self._h:
+                    return -1, None
+                args = _Value()
+                try:
+                    self._fill(args, ("list", specs))
                     return self._L.Moza_DeviceCommandSend(self._h, cmd, byref(args)), None
-                e = self._L.Moza_DeviceCommandSendSync(self._h, cmd, byref(args), timeout_ms, byref(res))
-                reply = None
-                if e == _ERR_OK:
-                    v = res
-                    while v.type == _VT_LIST and v.data.listValue.size:
-                        v = _Value.from_address(v.data.listValue.data)
-                    if v.type in (_VT_INT, _VT_UINT):
-                        reply = v.data.uintValue if v.type == _VT_UINT else v.data.intValue
-                return e, reply
-            finally:
-                self._L.Moza_ValueDestroy(byref(res))
-                self._L.Moza_ValueDestroy(byref(args))
+                finally:
+                    self._L.Moza_ValueDestroy(byref(args))
+        h = self._begin_blocking()
+        if h is None:
+            return -1, None
+        args, res = _Value(), _Value()
+        try:
+            self._fill(args, ("list", specs))
+            e = self._L.Moza_DeviceCommandSendSync(h, cmd, byref(args), timeout_ms, byref(res))
+            reply = None
+            if e == _ERR_OK:
+                v = res
+                while v.type == _VT_LIST and v.data.listValue.size:
+                    v = _Value.from_address(v.data.listValue.data)
+                if v.type in (_VT_INT, _VT_UINT):
+                    reply = v.data.uintValue if v.type == _VT_UINT else v.data.intValue
+            return e, reply
+        finally:
+            self._L.Moza_ValueDestroy(byref(res))
+            self._L.Moza_ValueDestroy(byref(args))
+            self._end_blocking()
 
     def set_param_uint(self, param_id: int, value: int, signed: bool = False) -> int:
         """Asynchronously write an integer parameter; returns the SDK error code."""
@@ -361,23 +391,27 @@ class MozaSdk:
                 v.data.uintValue = int(value)
             return self._L.Moza_DeviceParameterSetValue(self._h, param_id, byref(v))
 
-    def get_param_int(self, param_id: int, timeout_ms: int = 2000) -> Optional[int]:
-        """Synchronously read an integer parameter; None on failure."""
-        with self._lock:
-            if not self._h:
+    def get_param_int(self, param_id: int, timeout_ms: int = 2000, fresh: bool = True) -> Optional[int]:
+        """Read an integer parameter (blocking, outside the send lock); None on failure.
+        ``fresh``: ask the base (FetchSync) instead of possibly returning the SDK's cached
+        value (GetValueSync) - needed to confirm a write."""
+        h = self._begin_blocking()
+        if h is None:
+            return None
+        v = _Value()
+        try:
+            fn = self._L.Moza_DeviceParameterFetchSync if fresh else self._L.Moza_DeviceParameterGetValueSync
+            e = fn(h, param_id, timeout_ms, byref(v))
+            if e != _ERR_OK:
                 return None
-            v = _Value()
-            try:
-                e = self._L.Moza_DeviceParameterGetValueSync(self._h, param_id, timeout_ms, byref(v))
-                if e != _ERR_OK:
-                    return None
-                if v.type == _VT_UINT:
-                    return int(v.data.uintValue)
-                if v.type == _VT_INT:
-                    return int(v.data.intValue)
-                return None
-            finally:
-                self._L.Moza_ValueDestroy(byref(v))
+            if v.type == _VT_UINT:
+                return int(v.data.uintValue)
+            if v.type == _VT_INT:
+                return int(v.data.intValue)
+            return None
+        finally:
+            self._L.Moza_ValueDestroy(byref(v))
+            self._end_blocking()
 
     def poll_torque(self) -> int:
         with self._lock:
@@ -566,6 +600,7 @@ class MozaFFBDevice(DInputFFBDevice):
         self.connection_generation = 0       # +1 on every DirectInput re-open
         self._mode_req_lock = threading.Lock()
         self._mode_req = None                # latest pending (mode, on_done) request
+        self._refresh_req = False            # re-read the base after a reconnect
         self._mode_worker = None
         super().__init__(guid, **kwargs)
         # Which channel plays the constant/ramp/periodic effects follows the base mode:
@@ -643,9 +678,15 @@ class MozaFFBDevice(DInputFFBDevice):
             super().reset_effects()
             for h in self._live_moza_handles():
                 h.invalidate()
-            with self._slot_lock:
-                self._free_slots = set(range(SLOT_MIN, SLOT_MAX + 1))
-            self.sdk.send(CMD_CONTROL, [("i", 2)], sync=True)
+            e, _ = self.sdk.send(CMD_CONTROL, [("i", 2)], sync=True)
+            if e == _ERR_OK:
+                with self._slot_lock:       # the base freed every effect: all slots are free
+                    self._free_slots = set(range(SLOT_MIN, SLOT_MAX + 1))
+            else:
+                # not confirmed: the invalidated handles' slots may still be in use on the
+                # base, so they stay out of the pool until a reset succeeds
+                logging.warning(f"MOZA: effect reset not confirmed (err {e}); "
+                                f"{len(self._free_slots)} effect slots stay available")
             self.sdk.send(CMD_CONTROL, [("i", 1)], sync=True)
             self.sdk.send(CMD_CONTROL, [("i", 3)], sync=True)
 
@@ -680,46 +721,74 @@ class MozaFFBDevice(DInputFFBDevice):
         """Switch the base mode on a worker thread (the switch waits for the base's
         confirmation and must not block the telemetry loop or the UI).  Requests are
         serialised; while one runs only the newest pending request is kept.
-        ``on_done(mode, ok)`` is called on the worker thread."""
+        ``on_done(mode, ok)`` is called on the worker thread for every request - a
+        request superseded by a newer one before it ran gets ``ok=False``."""
+        superseded = None
         with self._mode_req_lock:
-            self._mode_req = (str(mode).upper(), on_done)
-            if self._mode_worker is not None and self._mode_worker.is_alive():
-                return
-            self._mode_worker = threading.Thread(target=self._mode_worker_loop,
-                                                 name="MozaBaseMode", daemon=True)
-            self._mode_worker.start()
+            superseded, self._mode_req = self._mode_req, (str(mode).upper(), on_done)
+            self._start_mode_worker()
+        if superseded is not None:
+            self._notify_mode(superseded, False)
+
+    def request_refresh(self):
+        """Re-read the base mode and re-assert the FFB source on the worker thread."""
+        with self._mode_req_lock:
+            self._refresh_req = True
+            self._start_mode_worker()
+
+    def _start_mode_worker(self):          # with _mode_req_lock held
+        if self._mode_worker is not None and self._mode_worker.is_alive():
+            return
+        self._mode_worker = threading.Thread(target=self._mode_worker_loop,
+                                             name="MozaBaseMode", daemon=True)
+        self._mode_worker.start()
+
+    @staticmethod
+    def _notify_mode(req, ok):
+        mode, on_done = req
+        if on_done is not None:
+            try:
+                on_done(mode, ok)
+            except Exception:
+                logging.exception("MOZA: base mode callback failed")
 
     def _mode_worker_loop(self):
         while True:
             with self._mode_req_lock:
+                refresh, self._refresh_req = self._refresh_req, False
                 req, self._mode_req = self._mode_req, None
-                if req is None or self._keepalive_stop.is_set():
+                stopping = self._keepalive_stop.is_set()
+                if stopping or (req is None and not refresh):
                     self._mode_worker = None
-                    return
-            mode, on_done = req
-            try:
-                ok = self.set_base_mode(mode)
-            except Exception:
-                logging.exception("MOZA: base mode switch failed")
-                ok = False
-            if on_done is not None:
+            if stopping:
+                if req is not None:
+                    self._notify_mode(req, False)
+                return
+            if req is None and not refresh:
+                return
+            if refresh:
                 try:
-                    on_done(mode, ok)
+                    mode = self._read_base_mode()
+                    if mode is not None:
+                        self._follow_base_mode(mode)
+                    self.ensure_telemetry_ffb_source()
                 except Exception:
-                    logging.exception("MOZA: base mode callback failed")
+                    logging.exception("MOZA: refreshing the base state after reconnect failed")
+            if req is not None:
+                try:
+                    ok = self.set_base_mode(req[0])
+                except Exception:
+                    logging.exception("MOZA: base mode switch failed")
+                    ok = False
+                self._notify_mode(req, ok)
 
     def _try_reconnect(self):
         super()._try_reconnect()
         if not self._reconnecting and not self._shutdown:
-            # re-opened: the base may have been power-cycled or changed by Cockpit
+            # re-opened (Qt timer, main thread): the base may have been power-cycled or
+            # changed by Cockpit - re-read it on the worker thread, not here
             self.connection_generation += 1
-            try:
-                mode = self._read_base_mode()
-                if mode is not None:
-                    self._follow_base_mode(mode)
-                self.ensure_telemetry_ffb_source()
-            except Exception:
-                logging.exception("MOZA: refreshing the base state after reconnect failed")
+            self.request_refresh()
 
     def _read_base_mode(self, expect=None, attempts=4, timeout_ms=500) -> Optional[str]:
         """Read Main_SteerForceMode from the base ("FFB" / "FS"), None if unreadable.
@@ -795,12 +864,26 @@ class MozaFFBDevice(DInputFFBDevice):
         self.sdk.close()
 
 
-def open_moza_or_none(guid: str, info=None) -> Optional[MozaFFBDevice]:
+def same_model_count(info, devices) -> int:
+    """How many DirectInput devices share ``info``'s USB vendor/product id."""
+    key = (getattr(info, "vendor_id", None), getattr(info, "product_id", None))
+    return sum(1 for d in devices or ()
+               if (getattr(d, "vendor_id", None), getattr(d, "product_id", None)) == key)
+
+
+def open_moza_or_none(guid: str, info=None, devices=None) -> Optional[MozaFFBDevice]:
     """Return a MozaFFBDevice for a MOZA DirectInput device when the MOZA SDK is usable,
     else None (the caller falls back to plain DirectInput)."""
     if os.environ.get("TELEMFFB_MOZA_DISABLE"):
         return None
     if info is not None and not is_moza_device(info):
+        return None
+    if info is not None and same_model_count(info, devices) > 1:
+        # two bases of one model: USB ids cannot tell which physical unit the SDK would
+        # open, so never risk driving the other one
+        logging.warning(f"MOZA: {same_model_count(info, devices)} devices with USB id "
+                        f"{info.vendor_id:04X}:{info.product_id:04X} - cannot match the SDK base "
+                        "to the selected one; using plain DirectInput")
         return None
     dll = sdk_dll_path()
     if not dll:

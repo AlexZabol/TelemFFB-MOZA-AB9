@@ -1564,9 +1564,10 @@ class HapticEffect(Destroyable):
         moza = None
         try:
             from telemffb.hw import ffb_moza
-            info = next((d for d in DInputFFBDevice.enumerate() if d.guid == guid), None)
+            devices = list(DInputFFBDevice.enumerate())
+            info = next((d for d in devices if d.guid == guid), None)
             if info is not None and ffb_moza.is_moza_device(info):
-                moza = ffb_moza.open_moza_or_none(guid, info)
+                moza = ffb_moza.open_moza_or_none(guid, info, devices)
         except Exception:
             logging.exception("MOZA backend unavailable, using plain DirectInput")
         cls.device = moza if moza is not None else DInputFFBDevice(guid)
