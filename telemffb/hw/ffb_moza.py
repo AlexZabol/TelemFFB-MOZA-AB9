@@ -189,6 +189,7 @@ class MozaSdk:
                 ("Moza_DeviceClose", c_int32, [c_void_p]),
                 ("Moza_DeviceParameterFetch", c_int32, [c_void_p, c_int32]),
                 ("Moza_DeviceParameterSetValue", c_int32, [c_void_p, c_int32, pV]),
+                ("Moza_DeviceParameterGetValueSync", c_int32, [c_void_p, c_int32, c_int32, pV]),
                 ("Moza_DeviceCommandSend", c_int32, [c_void_p, c_int32, pV]),
                 ("Moza_DeviceCommandSendSync", c_int32, [c_void_p, c_int32, pV, c_int32, pV])):
             fn = getattr(L, name)
@@ -298,6 +299,24 @@ class MozaSdk:
                 v.type = _VT_UINT
                 v.data.uintValue = int(value)
             return self._L.Moza_DeviceParameterSetValue(self._h, param_id, byref(v))
+
+    def get_param_int(self, param_id: int, timeout_ms: int = 2000) -> Optional[int]:
+        """Synchronously read an integer parameter; None on failure."""
+        with self._lock:
+            if not self._h:
+                return None
+            v = _Value()
+            try:
+                e = self._L.Moza_DeviceParameterGetValueSync(self._h, param_id, timeout_ms, byref(v))
+                if e != _ERR_OK:
+                    return None
+                if v.type == _VT_UINT:
+                    return int(v.data.uintValue)
+                if v.type == _VT_INT:
+                    return int(v.data.intValue)
+                return None
+            finally:
+                self._L.Moza_ValueDestroy(byref(v))
 
     def poll_torque(self) -> int:
         with self._lock:
@@ -450,14 +469,25 @@ class MozaFFBDevice(DInputFFBDevice):
         self._slot_lock = threading.Lock()
         self._keepalive_stop = threading.Event()
         super().__init__(guid, **kwargs)
+        # Which channel plays the constant/ramp/periodic effects follows the base mode:
+        # Force Feedback -> DirectInput (exactly like official TelemFFB),
+        # Force Sensing  -> MOZA SDK (DirectInput effects are ignored by the base there).
+        self._base_mode = "FS" if self.sdk.get_param_int(PARAM_STEER_FORCE_MODE) == 1 else "FFB"
         if self.ensure_telemetry_ffb_source():
             logging.info("MOZA: FFB source set to Telemetry + DirectInput (Main_CtrlModeSet=2)")
         self.sdk.send(CMD_CONTROL, [("i", 1)], sync=True)   # start effect calculation
         self.sdk.send(CMD_CONTROL, [("i", 3)], sync=True)   # as Cockpit does before playing
         self._keepalive = threading.Thread(target=self._keepalive_loop, name="MozaFFBKeepalive", daemon=True)
         self._keepalive.start()
-        logging.info(f"MOZA: SDK effect channel open on '{sdk.device_name}' "
-                     "(periodic/constant effects via MOZA SDK, conditions via DirectInput)")
+        logging.info(f"MOZA: SDK effect channel open on '{sdk.device_name}'; base in "
+                     f"{'Force Sensing' if self._base_mode == 'FS' else 'Force Feedback'} mode -> "
+                     f"effects via {self._channel_name()}")
+
+    def _use_sdk_effects(self) -> bool:
+        return self._base_mode == "FS" and self.sdk.is_open
+
+    def _channel_name(self) -> str:
+        return "MOZA SDK (conditions via DirectInput)" if self._use_sdk_effects() else "DirectInput (as official TelemFFB)"
 
     # -- slots ----------------------------------------------------------------------
     def _take_slot(self) -> Optional[int]:
@@ -475,10 +505,8 @@ class MozaFFBDevice(DInputFFBDevice):
 
     # -- effects --------------------------------------------------------------------
     def create_effect(self, type):
-        if type not in SDK_EFFECTS:
-            return super().create_effect(type)          # conditions -> DirectInput
-        if not self.sdk.is_open:
-            return super().create_effect(type)
+        if type not in SDK_EFFECTS or not self._use_sdk_effects():
+            return super().create_effect(type)          # conditions, and everything in FFB mode
         slot = self._take_slot()
         if slot is None:
             logging.warning(f"MOZA: effect slots exhausted, cannot create {effect_names.get(type, type)}")
@@ -528,6 +556,13 @@ class MozaFFBDevice(DInputFFBDevice):
             logging.warning(f"MOZA: setting base mode {mode} failed (err {e})")
             return False
         self.ensure_telemetry_ffb_source()
+        mode = str(mode).upper()
+        if mode != self._base_mode:
+            self._base_mode = mode
+            # move the effects to the other channel: drop every device effect; their
+            # HapticEffect owners re-create them (now on the new channel) on next start
+            self.reset_effects()
+            logging.info(f"MOZA: effects now via {self._channel_name()}")
         return True
 
     def ensure_telemetry_ffb_source(self) -> bool:

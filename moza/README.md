@@ -10,7 +10,7 @@ The AB9 renders `MainCtrl_Ffb*` effects only while the host keeps reading the mo
 the base accepts every command and produces no force, in either mode.
 
 ## Changes vs upstream
-- `telemffb/hw/ffb_moza.py` — `MozaFFBDevice(DInputFFBDevice)`: constant / ramp / periodic effects via
+- `telemffb/hw/ffb_moza.py` — `MozaFFBDevice(DInputFFBDevice)`: in **Force Feedback** mode every effect goes through DirectInput exactly as in official TelemFFB; in **Force Sensing** mode constant / ramp / periodic effects go via
   the MOZA SDK (slots 1–80, magnitude ×32767, direction in 1/100°), conditions/axes/buttons stay on
   DirectInput; a keepalive thread polls the torque and refreshes playing effects every 100 ms.
 - `telemffb/hw/ffb_rhino.py` — `HapticEffect.open_dinput` picks the MOZA backend for VID 0x346E

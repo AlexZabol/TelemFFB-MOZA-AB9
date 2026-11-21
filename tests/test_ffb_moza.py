@@ -97,6 +97,8 @@ def test_set_base_mode_writes_steer_force_mode():
     dev = ffb_moza.MozaFFBDevice.__new__(ffb_moza.MozaFFBDevice)
     calls = []
     dev.sdk = MagicMock(is_open=True)
+    dev._base_mode = "FFB"
+    dev.reset_effects = MagicMock()
     dev.sdk.set_param_uint.side_effect = lambda pid, v, signed=False: calls.append((pid, v)) or 0
     assert dev.set_base_mode("FS")
     assert dev.set_base_mode("FFB")
@@ -135,3 +137,29 @@ def test_direction_is_rotated_180_for_moza():
     assert ffb_moza.MozaEffectHandle._dir(180) == 0
     assert ffb_moza.MozaEffectHandle._dir(0) == 18000
     assert ffb_moza.MozaEffectHandle._dir(270) == 9000
+
+@pytest.mark.unit
+def test_effect_channel_follows_base_mode(monkeypatch):
+    from telemffb.hw.ffb_dinput import DInputFFBDevice
+    dinput_create = MagicMock(return_value="dinput-handle")
+    monkeypatch.setattr(DInputFFBDevice, "create_effect", dinput_create)
+    dev = ffb_moza.MozaFFBDevice.__new__(ffb_moza.MozaFFBDevice)
+    dev.sdk = MagicMock(is_open=True)
+    dev.sdk.send.return_value = (0, 4)
+    dev._free_slots = set(range(1, 81))
+    dev._moza_handles = []
+    import threading
+    dev._slot_lock = threading.Lock()
+    # Force Feedback: exactly like official TelemFFB - DirectInput
+    dev._base_mode = "FFB"
+    assert dev.create_effect(EFFECT_SINE) == "dinput-handle"
+    # Force Sensing: MOZA SDK
+    dev._base_mode = "FS"
+    h = dev.create_effect(EFFECT_SINE)
+    assert isinstance(h, ffb_moza.MozaEffectHandle)
+    # mode change moves effects to the other channel
+    dev.reset_effects = MagicMock()
+    dev.sdk.set_param_uint.return_value = 0
+    assert dev.set_base_mode("FFB")
+    dev.reset_effects.assert_called_once()
+    h.effect_id = None   # avoid __del__ side effects
