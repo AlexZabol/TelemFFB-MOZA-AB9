@@ -719,8 +719,18 @@ class FetchLatestVersion(QThread):
 
     def run(self):
         from .integration import get_version
+        from . import moza_release
         try:
             current_version = get_version()
+            if moza_release.is_moza_version(current_version):
+                # MOZA fork build: check the fork's GitHub releases, never upstream
+                newer = moza_release.newer_release(current_version)
+                if newer:
+                    logging.info(f"MOZA build {current_version}: release {newer[0]} available")
+                    self.version_result_signal.emit(newer[0], newer[1])
+                else:
+                    self.version_result_signal.emit("uptodate", "uptodate")
+                return
             latest_version = None
             latest_url = None
             url = "https://vpforcecontrols.com/downloads/TelemFFB/"

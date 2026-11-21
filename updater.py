@@ -229,6 +229,16 @@ def _rollback_moves(moved, log=None):
 
 def fetch_latest_version(current_version):
     """Returns (latest_version, download_url), or raises RuntimeError."""
+    from telemffb.utils import moza_release
+    if moza_release.is_moza_version(current_version):
+        # TelemFFB MOZA: update from the fork's GitHub releases, never from upstream
+        try:
+            newer = moza_release.newer_release(current_version)
+        except Exception as e:
+            raise RuntimeError(f"Could not fetch version info from {moza_release.RELEASES_PAGE}:\n{e}") from e
+        if not newer:
+            raise RuntimeError(f"Already up to date (version {current_version}).")
+        return newer[0], newer[1]
     send_url = DOWNLOAD_URL_BASE + LATEST_JSON
     try:
         ctx = ssl._create_unverified_context()

@@ -163,3 +163,14 @@ def test_effect_channel_follows_base_mode(monkeypatch):
     assert dev.set_base_mode("FFB")
     dev.reset_effects.assert_called_once()
     h.effect_id = None   # avoid __del__ side effects
+
+@pytest.mark.unit
+def test_moza_release_versions(monkeypatch):
+    from telemffb.utils import moza_release as mr
+    assert mr.is_moza_version("MOZA 0.1.8 (TelemFFB 3.0.261019)")
+    assert not mr.is_moza_version("3.0.261019")
+    assert mr.version_tuple("MOZA 0.1.10 (TelemFFB 3.0.261019)") == (0, 1, 10)
+    assert mr.version_tuple("v0.1.9") == (0, 1, 9)
+    monkeypatch.setattr(mr, "fetch_latest", lambda timeout=10: ("0.1.10", "u", "p"))
+    assert mr.newer_release("MOZA 0.1.9 (TelemFFB 3.0.261019)") == ("0.1.10", "u", "p")
+    assert mr.newer_release("MOZA 0.1.10 (TelemFFB 3.0.261019)") is None

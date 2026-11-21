@@ -108,14 +108,16 @@ class UpdateChecker(QObject):
         disabled for this build/instance, emit completion immediately so
         sim listeners (gated on version_check_complete) still start."""
         self._start_directlink_check()
-        if is_moza_build():
-            # MOZA fork: the official updater would replace this build with upstream
-            # TelemFFB (dropping the MOZA backend); updates come from the fork instead.
-            logging.info("MOZA build: official TelemFFB update check disabled "
-                         "(update with 'Обновить TelemFFB MOZA' / moza/update_telemffb_moza.ps1)")
-            self._emit_version_check_complete()
-            return
-        if G.master_instance and not G.release_version and not (G.dev_build or G.beta_build) and getattr(sys, 'frozen', False):
+        moza = is_moza_build()
+        if moza:
+            # MOZA fork: never offer upstream TelemFFB (it would drop the MOZA backend);
+            # FetchLatestVersion / the updater use the fork's GitHub releases instead.
+            from telemffb.utils import moza_release
+            G.release_notes_url = moza_release.RELEASES_PAGE
+            logging.info("MOZA build: checking for updates in the TelemFFB MOZA releases "
+                         f"({moza_release.RELEASES_PAGE})")
+        if G.master_instance and getattr(sys, 'frozen', False) and (
+                moza or (not G.release_version and not (G.dev_build or G.beta_build))):
             logging.info("Checking for version updates...")
             dlg = QProgressDialog("Checking for updates...", "Skip", 0, 0, self.mw)
             dlg.setWindowTitle("TelemFFB")
@@ -189,7 +191,7 @@ class UpdateChecker(QObject):
                            f"(<a href='{G.release_notes_url}'>release notes</a>)")
             if self.update_action is not None:
                 self.update_action.setDisabled(False)
-                self.update_action.setText("Install Latest TelemFFB")
+                self.update_action.setText("Install Latest TelemFFB MOZA" if is_moza_build() else "Install Latest TelemFFB")
             self.mw.version_label.setToolTip(url)
             self.mw.version_label.setText(f'Version Status: {status_text}')
 
@@ -294,8 +296,9 @@ class UpdateChecker(QObject):
 
     def perform_update(self, auto=True):
         mw = self.mw
-        if G.release_version or is_moza_build():
+        if G.release_version and not is_moza_build():
             return False
+        product = "TelemFFB MOZA" if is_moza_build() else "TelemFFB"
 
         ignore_auto_updates = G.system_settings.get('ignoreUpdate', False)
         if not auto:
@@ -321,7 +324,7 @@ class UpdateChecker(QObject):
                 # Rich text so the release-notes link is clickable; clicking
                 # it opens the browser without closing the dialog.
                 update_ans = QMessageBox.information(mw, "Update Available!!",
-                                                     f"A new version of TelemFFB is available (<b>{self.latest_version}</b>).<br><br>"
+                                                     f"A new version of {product} is available (<b>{self.latest_version}</b>).<br><br>"
                                                      f"<a href='{G.release_notes_url}'>View the release notes</a> to see what's new.<br><br>"
                                                      f"Would you like to automatically download and install it now?<br><br>"
                                                      f"You may also update later from the Utilities menu, or the "

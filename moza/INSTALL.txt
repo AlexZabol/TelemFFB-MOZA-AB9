@@ -45,14 +45,16 @@ Option B - by hand: open the MOZA SDK zip and copy
   Like any TelemFFB setting it can be set per sim, class or aircraft (e.g. F-16 in Force
   Sensing); the base switches when the aircraft loads or when you change the setting.
 - Effects work in both modes. Strength: the usual TelemFFB sliders and Effect Levels.
-- This build never offers the official TelemFFB update (that would remove MOZA support).
+- Updates: at start TelemFFB checks the TelemFFB MOZA releases on GitHub (never the official
+  TelemFFB, which would remove MOZA support); the status bar shows the version status and, if a
+  newer release exists, TelemFFB offers to download and install it (MOZA_SDK.dll is kept).
 
 
 5. Updating
 -----------
-Download the newest TelemFFB-MOZA-x.y.z.zip from
-https://github.com/AlexZabol/VPforce-TelemFFB/releases and repeat steps 2-3, or use
-moza/update_telemffb_moza.ps1 from the repository, which does it automatically.
+Accept the update offer at start (or Utilities > Install Latest TelemFFB MOZA). Manually:
+download the newest TelemFFB-MOZA-x.y.z.zip from https://github.com/AlexZabol/VPforce-TelemFFB/releases
+and unzip it over this folder (MOZA_SDK.dll stays).
 
 
 Licence: GPL-3.0 (see COPYING.txt in the repository). Based on VPforce TelemFFB
