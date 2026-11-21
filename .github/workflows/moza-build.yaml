@@ -13,10 +13,10 @@ name: MOZA build (sync with upstream)
 # from the user's own MOZA SDK download.
 
 on:
-  # Manual only for now (Actions > "MOZA build (sync with upstream)" > Run workflow).
-  # To re-enable the daily build, restore:
-  # schedule:
-  #   - cron: '17 3 * * *'
+  # Daily check of upstream TelemFFB (03:17 UTC); a release is built only when upstream or
+  # the moza branch changed.  Also runnable by hand (Actions > Run workflow).
+  schedule:
+    - cron: '17 3 * * *'
   workflow_dispatch:
     inputs:
       force:
