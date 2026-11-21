@@ -113,6 +113,26 @@ class _DevInfo(Structure):
                 ("reserved", c_void_p)]
 
 
+class _LogContext(Structure):     # MOZA_LOG_CONTEXT (declared outside moza.h's pack(1) block)
+    _fields_ = [("level", c_int32), ("message", c_void_p), ("messageSize", c_uint32),
+                ("category", c_void_p), ("categorySize", c_uint32), ("reserved", c_void_p * 4)]
+
+
+_LOG_CB_T = CFUNCTYPE(None, POINTER(_LogContext), c_void_p)
+_SDK_LOG_WARNING = 2   # MOZA_LOG_LEVEL: 0 debug, 1 info, 2 warning, 3 critical, 4 fatal
+
+
+def _sdk_log(ctx_ptr, _user):
+    try:
+        c = ctx_ptr.contents
+        if c.level < _SDK_LOG_WARNING:
+            return
+        msg = ctypes.string_at(c.message, c.messageSize).decode("utf-8", "replace") if c.message else ""
+        logging.warning(f"MOZA SDK: {msg}")
+    except Exception:
+        pass
+
+
 def _clamp(v, lo, hi):
     return lo if v < lo else hi if v > hi else v
 
@@ -198,6 +218,15 @@ class MozaSdk:
         self._lock = threading.RLock()
         self._h = None
         self.device_name = ""
+        # Route the SDK's own log to TelemFFB's log (warnings and errors only) instead of
+        # its default per-command DEBUG output on the console.
+        try:
+            L.Moza_SetLogCallback.restype = c_int32
+            L.Moza_SetLogCallback.argtypes = [_LOG_CB_T, c_void_p]
+            self._log_cb = _LOG_CB_T(_sdk_log)          # keep a reference for the DLL's lifetime
+            L.Moza_SetLogCallback(self._log_cb, None)
+        except Exception:
+            logging.debug("MOZA SDK: log callback not set", exc_info=True)
 
     # -- connection -----------------------------------------------------------------
     def open(self, timeout_s: float = 10.0) -> bool:
@@ -579,6 +608,8 @@ class MozaFFBDevice(DInputFFBDevice):
     def _keepalive_loop(self):
         bad = 0
         while not self._keepalive_stop.wait(KEEPALIVE_INTERVAL_S):
+            if not self._use_sdk_effects():
+                continue    # Force Feedback: DirectInput path, like official TelemFFB - no polling
             try:
                 e = self.sdk.poll_torque()
                 bad = bad + 1 if e not in (_ERR_OK, _ERR_BUSY, _ERR_PENDING) else 0
