@@ -19,6 +19,7 @@
 import json
 import logging
 import os
+import re
 import shutil
 import ssl
 import stat
@@ -44,6 +45,8 @@ BACKUP_FOLDER = "_previous_version_backup"
 #: What a release puts beside the executable.  The backup moves these and
 #: nothing else; any other entry in the folder is not TelemFFB's to touch.
 OWNED_ENTRIES = (EXECUTABLE_NAME, "assets", "_RELEASE_NOTES.txt")
+#: What an update package must contain before the installation is touched.
+REQUIRED_ENTRIES = (EXECUTABLE_NAME, "assets/base_library.zip", "assets/defaults.xml")
 
 STYLESHEET = """
 QMainWindow, QWidget {
@@ -336,9 +339,14 @@ class UpdateWorker(QThread):
         if bad is not None:
             raise RuntimeError(f"The downloaded update is damaged ({bad}).\n\n"
                                "No changes have been made to your installation.")
-        if EXECUTABLE_NAME not in names:
-            raise RuntimeError(f"The downloaded update does not contain {EXECUTABLE_NAME}.\n\n"
-                               "No changes have been made to your installation.")
+        # a complete PyInstaller build: the exe plus its runtime in assets/
+        missing = [n for n in REQUIRED_ENTRIES if n not in names]
+        if not any(re.fullmatch(r"assets/python3\d+\.dll", n, re.IGNORECASE) for n in names):
+            missing.append("assets/python3XX.dll")
+        if missing:
+            raise RuntimeError("The downloaded update is incomplete; missing:\n\n"
+                               + "\n".join(missing)
+                               + "\n\nNo changes have been made to your installation.")
         self.log.emit("Update package checked.")
 
     def _restore_backup(self):

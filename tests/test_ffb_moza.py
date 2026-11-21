@@ -25,7 +25,7 @@ class _FakeDevice:
         self.sdk = _FakeSdk()
         self.released = []
 
-    def release_slot(self, slot):
+    def release_slot(self, slot, freed=True):
         self.released.append(slot)
 
 
@@ -127,6 +127,7 @@ def _moza_device(sdk, base_mode="FFB"):
     dev._slot_lock = threading.Lock()
     dev.fx_lock = threading.RLock()
     dev.reset_effects = MagicMock()
+    dev.connection_generation = 0
     return dev
 
 
@@ -175,13 +176,18 @@ def _mixin(monkeypatch, dev):
     m = MozaBaseModeMixIn.__new__(MozaBaseModeMixIn)
     m._moza_mode_applied = "KEEP"
     m._moza_device = dev
+    m._moza_generation = getattr(dev, "connection_generation", None)
     m._moza_retry_at = 0.0
+    m._moza_pending = None
     return m
 
 
 def _ab9(**kw):
     dev = MagicMock(**kw)
     dev.info = MagicMock(product_id=0x1000, product_string="MOZA AB9 FFB Base")
+    dev.connection_generation = 0
+    # synchronous stand-in for the worker thread
+    dev.request_base_mode.side_effect = lambda mode, cb: cb(mode, dev.set_base_mode(mode))
     return dev
 
 
@@ -216,7 +222,11 @@ def test_moza_base_mode_mixin_retries(monkeypatch):
     m._apply_moza_base_mode()
     m._apply_moza_base_mode()
     assert dev.set_base_mode.call_count == 2
-    # a re-opened device gets the mode again
+    # the same device re-opened by DirectInput gets the mode again
+    dev.connection_generation += 1
+    m._apply_moza_base_mode()
+    assert dev.set_base_mode.call_count == 3
+    # a replaced device too
     dev2 = _ab9(connected=True)
     dev2.set_base_mode.return_value = True
     from telemffb.hw.ffb_rhino import HapticEffect
@@ -286,13 +296,94 @@ def test_no_resend_after_destroy():
 @pytest.mark.unit
 def test_select_base_matches_directinput_device():
     from types import SimpleNamespace as NS
-    ab9, ab6 = NS(productId=0x1000), NS(productId=0x1001)
-    assert ffb_moza.select_base([ab9]) is ab9                 # one base: unambiguous
-    assert ffb_moza.select_base([ab9], 0x1001) is ab9
+    ab9, ab6 = NS(vendorId=0x346E, productId=0x1000), NS(vendorId=0x346E, productId=0x1001)
+    assert ffb_moza.select_base([ab9], 0x1000) is ab9
+    assert ffb_moza.select_base([ab9], 0x1001) is None        # AB6 selected, only an AB9 in the SDK
     assert ffb_moza.select_base([ab9, ab6], 0x1001) is ab6
-    assert ffb_moza.select_base([ab9, ab6]) is None           # unknown which one
-    assert ffb_moza.select_base([ab9, NS(productId=0x1000)], 0x1000) is None   # two AB9
+    assert ffb_moza.select_base([ab9]) is ab9                 # no product id: a lone base only
+    assert ffb_moza.select_base([ab9, ab6]) is None
+    assert ffb_moza.select_base([ab9, NS(vendorId=0x346E, productId=0x1000)], 0x1000) is None   # two AB9
     assert ffb_moza.select_base([], 0x1000) is None
+
+
+@pytest.mark.unit
+def test_busy_start_is_not_playing():
+    dev = _FakeDevice()
+    dev.sdk.send = lambda cmd, specs, sync=False, timeout_ms=1000: (ffb_moza._ERR_BUSY, None)
+    h = ffb_moza.MozaEffectHandle(dev, 2, EFFECT_SINE)
+    h.start()
+    assert not h.started
+    h.effect_id = None
+
+
+@pytest.mark.unit
+def test_slot_not_freed_by_base_stays_out_of_pool_until_reset():
+    sdk = _ParamSdk()
+    dev = _moza_device(sdk, base_mode="FS")
+    del dev.reset_effects                       # the real one
+    from telemffb.hw.ffb_dinput import DInputFFBDevice
+    import unittest.mock as um
+    sdk.send = lambda cmd, specs, sync=False, timeout_ms=1000: (
+        (ffb_moza._ERR_OK, specs[1][1]) if cmd == ffb_moza.CMD_NEW_EFFECT else
+        (-1, None) if cmd == ffb_moza.CMD_OPERATION and specs[1][1] == ffb_moza.OP_FREE else (0, None))
+    h = dev.create_effect(EFFECT_SINE)
+    assert h.effect_id == 1
+    h.destroy()
+    assert 1 not in dev._free_slots
+    with um.patch.object(DInputFFBDevice, "reset_effects"):
+        dev.reset_effects()
+    assert 1 in dev._free_slots
+
+
+@pytest.mark.unit
+def test_reset_cannot_interleave_with_effect_creation():
+    import threading
+    sdk = _ParamSdk()
+    dev = _moza_device(sdk, base_mode="FS")
+    del dev.reset_effects
+    from telemffb.hw.ffb_dinput import DInputFFBDevice
+    import unittest.mock as um
+    in_new, go_on = threading.Event(), threading.Event()
+
+    def send(cmd, specs, sync=False, timeout_ms=1000):
+        if cmd == ffb_moza.CMD_NEW_EFFECT:
+            in_new.set()
+            go_on.wait(2)
+            return 0, specs[1][1]
+        return 0, None
+    sdk.send = send
+    out = {}
+    t = threading.Thread(target=lambda: out.setdefault("h", dev.create_effect(EFFECT_SINE)))
+    with um.patch.object(DInputFFBDevice, "reset_effects"):
+        t.start()
+        assert in_new.wait(2)
+        r = threading.Thread(target=dev.reset_effects)
+        r.start()
+        r.join(0.2)
+        assert r.is_alive()                     # reset waits for the creation to finish
+        go_on.set()
+        t.join(2)
+        r.join(2)
+    h = out["h"]
+    assert not h                                # the reset invalidated the new handle ...
+    h2 = dev.create_effect(EFFECT_SINE)
+    assert h2.effect_id == 1                    # ... so slot 1 belongs to one live handle only
+    h2.effect_id = None
+
+
+@pytest.mark.unit
+def test_reconnect_refreshes_mode_and_bumps_generation(monkeypatch):
+    from telemffb.hw.ffb_dinput import DInputFFBDevice
+    sdk = _ParamSdk()
+    sdk.params[ffb_moza.PARAM_STEER_FORCE_MODE] = 1        # changed while disconnected
+    dev = _moza_device(sdk, base_mode="FFB")
+    dev.connection_generation = 0
+    dev._reconnecting, dev._shutdown = False, False
+    monkeypatch.setattr(DInputFFBDevice, "_try_reconnect", lambda self: None)
+    dev._try_reconnect()
+    assert dev.connection_generation == 1
+    assert dev._base_mode == "FS"
+    dev.reset_effects.assert_called_once()
 
 
 @pytest.mark.unit

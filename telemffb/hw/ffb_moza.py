@@ -188,19 +188,25 @@ def apply_base_mode_setting(value) -> bool:
     if mode not in BASE_MODES or not base_mode_supported():
         return False
     from telemffb.hw.ffb_rhino import HapticEffect
-    ok = HapticEffect.device.set_base_mode(mode)
-    if ok:
-        logging.info(f"MOZA: base mode set to {'Force Sensing' if mode == 'FS' else 'Force Feedback'} (settings)")
-    return ok
+
+    def done(m, ok):
+        if ok:
+            logging.info(f"MOZA: base mode set to {'Force Sensing' if m == 'FS' else 'Force Feedback'} (settings)")
+        else:
+            logging.warning(f"MOZA: base mode {m} from settings not confirmed; it is retried while an aircraft is loaded")
+    # off the UI thread: the switch waits for the base's confirmation
+    HapticEffect.device.request_base_mode(mode, done)
+    return True
 
 
 def select_base(bases, product_id=None):
-    """The SDK flight base to drive: the only one, or the only one with ``product_id``."""
-    if len(bases) == 1:
-        return bases[0]
+    """The SDK flight base to drive: the single one with the DirectInput device's USB
+    ids (the SDK reports the same 346E:PPPP, e.g. AB9 = 346E:1000).  Without a product
+    id only a lone base is accepted.  Anything ambiguous -> None (plain DirectInput)."""
     if product_id is None:
-        return None
-    match = [b for b in bases if getattr(b, "productId", None) == product_id]
+        return bases[0] if len(bases) == 1 else None
+    match = [b for b in bases if getattr(b, "productId", None) == product_id
+             and getattr(b, "vendorId", MOZA_VENDOR_ID) == MOZA_VENDOR_ID]
     return match[0] if len(match) == 1 else None
 
 
@@ -245,9 +251,9 @@ class MozaSdk:
 
     # -- connection -----------------------------------------------------------------
     def open(self, timeout_s: float = 10.0, product_id: Optional[int] = None) -> bool:
-        """Open the flight base.  One base: that one.  Several: only the single one whose
-        USB product id matches the DirectInput device (``product_id``); otherwise fail,
-        so the caller keeps plain DirectInput rather than drive a different base."""
+        """Open the flight base whose USB ids match the DirectInput device
+        (``product_id``); fail when there is no single match, so the caller keeps plain
+        DirectInput rather than drive a different base."""
         with self._lock:
             e = self._L.Moza_Initialize()
             if e not in (_ERR_OK, _ERR_ALREADY_INITIALIZED):
@@ -272,9 +278,11 @@ class MozaSdk:
                 if not bases:
                     logging.warning("MOZA SDK: no flight base found")
                 else:
-                    logging.warning(f"MOZA SDK: {len(bases)} flight bases found and none matches the "
-                                    f"selected device uniquely (product id {product_id!r}) - "
-                                    "using plain DirectInput")
+                    found = ", ".join(f"{b.name.decode('utf-8', 'replace')} ({b.vendorId:04X}:{b.productId:04X})"
+                                      for b in bases)
+                    want = f"346E:{product_id:04X}" if isinstance(product_id, int) else "unknown"
+                    logging.warning(f"MOZA SDK: no single flight base matches the selected device ({want}); "
+                                    f"found {found} - using plain DirectInput")
                 self._L.Moza_Shutdown()
                 return False
             h = c_void_p()
@@ -447,7 +455,9 @@ class MozaEffectHandle(ffb_backend.BaseEffectHandle):
             if self._last_cmd:
                 self.device.sdk.send(*self._last_cmd)
             e, _ = self.device.sdk.send(CMD_OPERATION, [("u", self.effect_id), ("u", OP_START)])
-            if e not in (_ERR_OK, _ERR_PENDING, _ERR_BUSY):
+            # only an accepted command counts (the SDK returns OK); BUSY or an error leaves
+            # the effect stopped, so the next HapticEffect.start() sends OP_START again
+            if e not in (_ERR_OK, _ERR_PENDING):
                 logging.warning(f"MOZA: start of {self.name} (slot {self.effect_id}) failed (err {e})")
                 self._started = False
                 return self
@@ -468,8 +478,9 @@ class MozaEffectHandle(ffb_backend.BaseEffectHandle):
         with self._lock:
             if self.effect_id:
                 self.device.sdk.send(CMD_OPERATION, [("u", self.effect_id), ("u", OP_STOP)])
-                self.device.sdk.send(CMD_OPERATION, [("u", self.effect_id), ("u", OP_FREE)])
-                self.device.release_slot(self.effect_id)
+                e, _ = self.device.sdk.send(CMD_OPERATION, [("u", self.effect_id), ("u", OP_FREE)])
+                # a slot the base did not free stays out of the pool until the next reset
+                self.device.release_slot(self.effect_id, freed=e in (_ERR_OK, _ERR_PENDING))
                 self.effect_id = None
                 self.type = 0
                 self._started = False
@@ -552,6 +563,10 @@ class MozaFFBDevice(DInputFFBDevice):
         self._slot_lock = threading.Lock()
         self.fx_lock = threading.RLock()     # serialises effect sends, stop/free and reset
         self._keepalive_stop = threading.Event()
+        self.connection_generation = 0       # +1 on every DirectInput re-open
+        self._mode_req_lock = threading.Lock()
+        self._mode_req = None                # latest pending (mode, on_done) request
+        self._mode_worker = None
         super().__init__(guid, **kwargs)
         # Which channel plays the constant/ramp/periodic effects follows the base mode:
         # Force Feedback -> DirectInput (exactly like official TelemFFB),
@@ -582,27 +597,33 @@ class MozaFFBDevice(DInputFFBDevice):
             self._free_slots.discard(s)
             return s
 
-    def release_slot(self, slot: int):
+    def release_slot(self, slot: int, freed: bool = True):
         with self._slot_lock:
             if SLOT_MIN <= slot <= SLOT_MAX:
-                self._free_slots.add(slot)
+                if freed:
+                    self._free_slots.add(slot)
+                else:
+                    logging.warning(f"MOZA: freeing effect slot {slot} failed; slot kept until the next reset")
 
     # -- effects --------------------------------------------------------------------
     def create_effect(self, type):
-        if type not in SDK_EFFECTS or not self._use_sdk_effects():
-            return super().create_effect(type)          # conditions, and everything in FFB mode
-        slot = self._take_slot()
-        if slot is None:
-            logging.warning(f"MOZA: effect slots exhausted, cannot create {effect_names.get(type, type)}")
-            return None
-        e, idx = self.sdk.send(CMD_NEW_EFFECT, [("u", type), ("u", slot)], sync=True)
-        if e != _ERR_OK or not idx:
-            logging.warning(f"MOZA: NewEffect({effect_names.get(type, type)}, slot {slot}) failed: err={e} reply={idx}")
-            self.release_slot(slot)
-            return None
-        h = MozaEffectHandle(self, int(idx), type)
-        self._moza_handles.append(weakref.ref(h))
-        return h
+        # channel choice, slot allocation, NEW_EFFECT and registration happen under the
+        # same lock as reset_effects(): a reset can never hand a slot to two handles
+        with self.fx_lock:
+            if type not in SDK_EFFECTS or not self._use_sdk_effects():
+                return super().create_effect(type)          # conditions, and everything in FFB mode
+            slot = self._take_slot()
+            if slot is None:
+                logging.warning(f"MOZA: effect slots exhausted, cannot create {effect_names.get(type, type)}")
+                return None
+            e, idx = self.sdk.send(CMD_NEW_EFFECT, [("u", type), ("u", slot)], sync=True)
+            if e != _ERR_OK or not idx:
+                logging.warning(f"MOZA: NewEffect({effect_names.get(type, type)}, slot {slot}) failed: err={e} reply={idx}")
+                self.release_slot(slot)
+                return None
+            h = MozaEffectHandle(self, int(idx), type)
+            self._moza_handles.append(weakref.ref(h))
+            return h
 
     def _live_moza_handles(self):
         alive = []
@@ -618,8 +639,8 @@ class MozaFFBDevice(DInputFFBDevice):
         return alive
 
     def reset_effects(self):
-        super().reset_effects()
         with self.fx_lock:
+            super().reset_effects()
             for h in self._live_moza_handles():
                 h.invalidate()
             with self._slot_lock:
@@ -654,6 +675,51 @@ class MozaFFBDevice(DInputFFBDevice):
                             f"{'Force Sensing' if actual == 'FS' else 'Force Feedback'}")
             return False
         return source_ok
+
+    def request_base_mode(self, mode: str, on_done=None):
+        """Switch the base mode on a worker thread (the switch waits for the base's
+        confirmation and must not block the telemetry loop or the UI).  Requests are
+        serialised; while one runs only the newest pending request is kept.
+        ``on_done(mode, ok)`` is called on the worker thread."""
+        with self._mode_req_lock:
+            self._mode_req = (str(mode).upper(), on_done)
+            if self._mode_worker is not None and self._mode_worker.is_alive():
+                return
+            self._mode_worker = threading.Thread(target=self._mode_worker_loop,
+                                                 name="MozaBaseMode", daemon=True)
+            self._mode_worker.start()
+
+    def _mode_worker_loop(self):
+        while True:
+            with self._mode_req_lock:
+                req, self._mode_req = self._mode_req, None
+                if req is None or self._keepalive_stop.is_set():
+                    self._mode_worker = None
+                    return
+            mode, on_done = req
+            try:
+                ok = self.set_base_mode(mode)
+            except Exception:
+                logging.exception("MOZA: base mode switch failed")
+                ok = False
+            if on_done is not None:
+                try:
+                    on_done(mode, ok)
+                except Exception:
+                    logging.exception("MOZA: base mode callback failed")
+
+    def _try_reconnect(self):
+        super()._try_reconnect()
+        if not self._reconnecting and not self._shutdown:
+            # re-opened: the base may have been power-cycled or changed by Cockpit
+            self.connection_generation += 1
+            try:
+                mode = self._read_base_mode()
+                if mode is not None:
+                    self._follow_base_mode(mode)
+                self.ensure_telemetry_ffb_source()
+            except Exception:
+                logging.exception("MOZA: refreshing the base state after reconnect failed")
 
     def _read_base_mode(self, expect=None, attempts=4, timeout_ms=500) -> Optional[str]:
         """Read Main_SteerForceMode from the base ("FFB" / "FS"), None if unreadable.
@@ -716,6 +782,9 @@ class MozaFFBDevice(DInputFFBDevice):
         ka = getattr(self, "_keepalive", None)
         if ka is not None and ka.is_alive() and ka is not threading.current_thread():
             ka.join(timeout=2.0)     # no keepalive send may reach a closed SDK
+        mw = self._mode_worker
+        if mw is not None and mw.is_alive() and mw is not threading.current_thread():
+            mw.join(timeout=8.0)     # a running mode switch finishes before the SDK closes
         try:
             for h in self._live_moza_handles():
                 h.stop()

@@ -28,13 +28,24 @@ def _zip(path, names):
     return str(path)
 
 
+FULL = [EXECUTABLE_NAME, "assets/base_library.zip", "assets/defaults.xml", "assets/python312.dll",
+        "assets/a.dll"]
+
+
 def test_valid_package_passes(tmp_path):
-    _worker(tmp_path)._validate_zip(_zip(tmp_path / "u.zip", [EXECUTABLE_NAME, "assets/a.dll"]))
+    _worker(tmp_path)._validate_zip(_zip(tmp_path / "u.zip", FULL))
 
 
-def test_package_without_executable_is_rejected(tmp_path):
-    with pytest.raises(RuntimeError, match="does not contain"):
-        _worker(tmp_path)._validate_zip(_zip(tmp_path / "u.zip", ["assets/a.dll"]))
+@pytest.mark.parametrize("drop", [EXECUTABLE_NAME, "assets/base_library.zip", "assets/defaults.xml",
+                                  "assets/python312.dll"])
+def test_incomplete_package_is_rejected(tmp_path, drop):
+    with pytest.raises(RuntimeError, match="incomplete"):
+        _worker(tmp_path)._validate_zip(_zip(tmp_path / "u.zip", [n for n in FULL if n != drop]))
+
+
+def test_exe_only_package_is_rejected(tmp_path):
+    with pytest.raises(RuntimeError, match="incomplete"):
+        _worker(tmp_path)._validate_zip(_zip(tmp_path / "u.zip", [EXECUTABLE_NAME]))
 
 
 def test_non_zip_is_rejected(tmp_path):
