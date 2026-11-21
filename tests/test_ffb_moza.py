@@ -457,6 +457,17 @@ def test_two_bases_of_one_model_stay_on_directinput(monkeypatch):
 
 
 @pytest.mark.unit
+def test_sdk_backend_only_for_ab9(monkeypatch):
+    from types import SimpleNamespace as NS
+    ab6 = NS(vendor_id=0x346E, product_id=0x1001, product_string="MOZA AB6 FFB Base", guid="a6")
+    ab9 = NS(vendor_id=0x346E, product_id=0x1000, product_string="MOZA AB9 FFB Base", guid="a9")
+    assert ffb_moza.is_ab9(ab9) and not ffb_moza.is_ab9(ab6)
+    assert not ffb_moza.is_ab9(NS(vendor_id=0x1234, product_id=0x1000, product_string="AB9 clone"))
+    monkeypatch.setattr(ffb_moza, "sdk_dll_path", lambda: pytest.fail("SDK must not be opened"))
+    assert ffb_moza.open_moza_or_none("a6", ab6, [ab6]) is None     # plain DirectInput
+
+
+@pytest.mark.unit
 def test_effect_creation_does_not_wait_for_a_running_reset():
     import threading
     sdk = _ParamSdk()

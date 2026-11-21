@@ -11,7 +11,8 @@
 # General Public License for more details.
 #
 
-"""MOZA flight base backend (AB6/AB9) through the official MOZA SDK.
+"""MOZA AB9 flight base backend through the official MOZA SDK (other MOZA bases have no
+Force Sensing mode and stay on plain DirectInput).
 
 Why this exists
 ---------------
@@ -170,9 +171,18 @@ def is_moza_device(info) -> bool:
 AB9_PRODUCT_ID = 0x1000
 
 
+def is_ab9(info) -> bool:
+    """A MOZA AB9 flight base - the only MOZA base with a Force Sensing mode, and so
+    the only one the MOZA SDK backend is used for."""
+    if not is_moza_device(info):
+        return False
+    name = str(getattr(info, "product_string", "") or "").upper()
+    return getattr(info, "product_id", None) == AB9_PRODUCT_ID or "AB9" in name
+
+
 def base_mode_supported(device=None) -> bool:
-    """Whether the connected device is a MOZA AB9 driven by the MOZA SDK backend -
-    the only base with a Force Sensing mode.  Gates the 'MOZA Base Mode' setting."""
+    """Whether the connected device is a MOZA AB9 driven by the MOZA SDK backend.
+    Gates the 'MOZA Base Mode' setting."""
     if device is None:
         from telemffb.hw.ffb_rhino import HapticEffect
         device = HapticEffect.device
@@ -918,6 +928,11 @@ def open_moza_or_none(guid: str, info=None, devices=None) -> Optional[MozaFFBDev
     if os.environ.get("TELEMFFB_MOZA_DISABLE"):
         return None
     if info is not None and not is_moza_device(info):
+        return None
+    if info is not None and not is_ab9(info):
+        # other MOZA bases have no Force Sensing mode: plain DirectInput, exactly like
+        # the official TelemFFB
+        logging.info(f"MOZA: '{getattr(info, 'product_string', '?')}' is not an AB9 - using plain DirectInput")
         return None
     if info is not None and same_model_count(info, devices) > 1:
         # two bases of one model: USB ids cannot tell which physical unit the SDK would

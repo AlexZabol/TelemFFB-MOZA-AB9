@@ -1,8 +1,9 @@
 # TelemFFB — MOZA flight base support (fork)
 
 This fork of [walmis/VPforce-TelemFFB](https://github.com/walmis/VPforce-TelemFFB) (GPL-3.0) adds a
-MOZA SDK backend so TelemFFB's telemetry effects play on MOZA flight bases (tested: AB9) — including
-the base's **Force Sensing** mode, where DirectInput effects are ignored.
+MOZA SDK backend so TelemFFB's telemetry effects play on the MOZA AB9 flight base — including the
+base's **Force Sensing** mode, where DirectInput effects are ignored. Other MOZA bases have no Force
+Sensing mode and run on plain DirectInput, exactly like the official TelemFFB.
 
 ## Key finding
 The AB9 renders `MainCtrl_Ffb*` effects only while the host keeps reading the motor output torque

@@ -169,9 +169,17 @@ def test_offer_only_for_moza_devices(monkeypatch):
     import telemffb.globals as G
     from telemffb.hw.ffb_dinput import DInputFFBDevice
     from telemffb.ui.dialogs import moza_sdk_offer as offer
-    moza = NS(guid="m", vendor_id=0x346E, product_id=0x1000)
+    moza = NS(guid="m", vendor_id=0x346E, product_id=0x1000, product_string="MOZA AB9 FFB Base")
+    ab6 = NS(guid="a6", vendor_id=0x346E, product_id=0x1001, product_string="MOZA AB6 FFB Base")
     other = NS(guid="o", vendor_id=0x1234, product_id=0x1)
-    monkeypatch.setattr(DInputFFBDevice, "enumerate", staticmethod(lambda: [moza, other]))
+    monkeypatch.setattr(DInputFFBDevice, "enumerate", staticmethod(lambda: [ab6, other]))
+    monkeypatch.delenv("TELEMFFB_MOZA_DISABLE", raising=False)
+    monkeypatch.setattr(G, "device_usbpid", None, raising=False)
+    monkeypatch.setattr(G, "device_di_guid", "a6", raising=False)
+    assert not offer.moza_sdk_wanted()                 # AB6 selected: no Force Sensing, no SDK
+    monkeypatch.setattr(G, "device_di_guid", None, raising=False)
+    assert not offer.moza_sdk_wanted()                 # only an AB6 connected
+    monkeypatch.setattr(DInputFFBDevice, "enumerate", staticmethod(lambda: [moza, ab6, other]))
     monkeypatch.delenv("TELEMFFB_MOZA_DISABLE", raising=False)
     monkeypatch.setattr(G, "device_usbpid", None, raising=False)
     monkeypatch.setattr(G, "device_di_guid", "m", raising=False)

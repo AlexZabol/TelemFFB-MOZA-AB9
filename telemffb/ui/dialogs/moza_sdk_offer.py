@@ -16,7 +16,7 @@ NO_PROMPT_KEY = "mozaSdkNoPrompt"
 def moza_sdk_wanted() -> bool:
     """Whether this instance would use the MOZA SDK: the backend is not disabled and
     the configured device - or, with none configured yet, a connected device - is a
-    MOZA DirectInput device."""
+    MOZA AB9 (the only MOZA base with Force Sensing)."""
     if os.environ.get("TELEMFFB_MOZA_DISABLE"):
         return False
     guid = getattr(G, "device_di_guid", None)
@@ -29,8 +29,8 @@ def moza_sdk_wanted() -> bool:
         logging.debug("MOZA SDK offer: DirectInput enumeration failed", exc_info=True)
         return False
     if guid:
-        return any(d.guid == guid and ffb_moza.is_moza_device(d) for d in devices)
-    return any(ffb_moza.is_moza_device(d) for d in devices)
+        return any(d.guid == guid and ffb_moza.is_ab9(d) for d in devices)
+    return any(ffb_moza.is_ab9(d) for d in devices)
 
 
 def offer_moza_sdk_download(parent=None) -> bool:
