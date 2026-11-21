@@ -284,40 +284,50 @@ class MozaSdk:
                                     "and the MOZA Cockpit window closed?")
                     return False
                 _SDK_USERS[0] += 1
-            t0 = time.monotonic()
+            # the registration belongs to this object only once the base is open: any
+            # other way out - a refusal or an exception - gives it back
+            opened = False
+            try:
+                opened = self._open_base(timeout_s, product_id)
+            finally:
+                if not opened:
+                    self._release_sdk()
+            return opened
+
+    def _open_base(self, timeout_s: float, product_id: Optional[int]) -> bool:
+        """Enumerate and open the matching base (with _lock held, SDK initialised)."""
+        t0 = time.monotonic()
+        n = c_uint32(0)
+        while time.monotonic() - t0 < timeout_s:   # enumeration is asynchronous
             n = c_uint32(0)
-            while time.monotonic() - t0 < timeout_s:   # enumeration is asynchronous
-                n = c_uint32(0)
-                self._L.Moza_DeviceGetList(None, byref(n))
-                if n.value:
-                    break
-                time.sleep(0.25)
-            arr = (_DevInfo * max(n.value, 1))()
-            cap = c_uint32(n.value)
-            self._L.Moza_DeviceGetList(arr, byref(cap))
-            bases = [arr[i] for i in range(cap.value)
-                     if arr[i].category == _DC_AS and arr[i].type & _DT_AS_FLIGHTBASE]
-            dev = select_base(bases, product_id)
-            if dev is None:
-                if not bases:
-                    logging.warning("MOZA SDK: no flight base found")
-                else:
-                    found = ", ".join(f"{b.name.decode('utf-8', 'replace')} ({b.vendorId:04X}:{b.productId:04X})"
-                                      for b in bases)
-                    want = f"346E:{product_id:04X}" if isinstance(product_id, int) else "unknown"
-                    logging.warning(f"MOZA SDK: no single flight base matches the selected device ({want}); "
-                                    f"found {found} - using plain DirectInput")
-                self._release_sdk()
-                return False
-            h = c_void_p()
-            e = self._L.Moza_DeviceOpen(dev.id, byref(h))
-            if e != _ERR_OK or not h.value:
-                logging.warning(f"MOZA SDK: Moza_DeviceOpen failed ({e})")
-                self._release_sdk()
-                return False
-            self._h = h.value
-            self.device_name = dev.name.decode("utf-8", "replace")
-            return True
+            self._L.Moza_DeviceGetList(None, byref(n))
+            if n.value:
+                break
+            time.sleep(0.25)
+        arr = (_DevInfo * max(n.value, 1))()
+        cap = c_uint32(n.value)
+        self._L.Moza_DeviceGetList(arr, byref(cap))
+        bases = [arr[i] for i in range(cap.value)
+                 if arr[i].category == _DC_AS and arr[i].type & _DT_AS_FLIGHTBASE]
+        dev = select_base(bases, product_id)
+        if dev is None:
+            if not bases:
+                logging.warning("MOZA SDK: no flight base found")
+            else:
+                found = ", ".join(f"{b.name.decode('utf-8', 'replace')} ({b.vendorId:04X}:{b.productId:04X})"
+                                  for b in bases)
+                want = f"346E:{product_id:04X}" if isinstance(product_id, int) else "unknown"
+                logging.warning(f"MOZA SDK: no single flight base matches the selected device ({want}); "
+                                f"found {found} - using plain DirectInput")
+            return False
+        h = c_void_p()
+        e = self._L.Moza_DeviceOpen(dev.id, byref(h))
+        if e != _ERR_OK or not h.value:
+            logging.warning(f"MOZA SDK: Moza_DeviceOpen failed ({e})")
+            return False
+        self._h = h.value
+        self.device_name = dev.name.decode("utf-8", "replace")
+        return True
 
     def close(self, timeout: float = 5.0):
         """Close the device and shut the SDK down - never while a native call is still
@@ -636,11 +646,13 @@ class MozaFFBDevice(DInputFFBDevice):
         self._slot_lock = threading.Lock()
         self.fx_lock = threading.RLock()     # serialises effect sends, stop/free and reset
         self._resetting = 0                  # > 0 while the base's effects are being reset
+        self._migration_pending = False      # a channel move whose effect reset failed
         self._keepalive_stop = threading.Event()
         self.connection_generation = 0       # +1 on every DirectInput re-open
         self._mode_req_lock = threading.Lock()
         self._mode_req = None                # latest pending (mode, on_done) request
         self._refresh_req = False            # re-read the base after a reconnect
+        self._refresh_retries = 0
         self._mode_worker = None
         super().__init__(guid, **kwargs)
         # Which channel plays the constant/ramp/periodic effects follows the base mode:
@@ -733,6 +745,12 @@ class MozaFFBDevice(DInputFFBDevice):
                     super().reset_effects()
                 except Exception as ex:     # DirectInput failed: still reset the SDK side,
                     dinput_error = ex       # then report it to the caller as before
+                    # its handles may not have been invalidated before the failure: do it
+                    # so their owners re-create them (on the current channel)
+                    try:
+                        self._invalidate_effects()
+                    except Exception:
+                        logging.exception("MOZA: invalidating DirectInput effects failed")
             e, _ = self.sdk.send(CMD_CONTROL, [("i", 2)], sync=True)
             if e == _ERR_OK:
                 with self._slot_lock:       # the base freed every effect: all slots are free
@@ -770,7 +788,8 @@ class MozaFFBDevice(DInputFFBDevice):
             logging.warning(f"MOZA: base did not report its mode after switching to {mode}; "
                             f"effects stay via {self._channel_name()}")
             return False
-        self._follow_base_mode(actual)
+        if not self._follow_base_mode(actual):
+            return False                # effects not moved yet: not done, retried later
         if actual != mode:
             logging.warning(f"MOZA: base mode {mode} requested, base reports "
                             f"{'Force Sensing' if actual == 'FS' else 'Force Feedback'}")
@@ -827,13 +846,19 @@ class MozaFFBDevice(DInputFFBDevice):
             if req is None and not refresh:
                 return
             if refresh:
+                moved = True
                 try:
                     mode = self._read_base_mode()
                     if mode is not None:
-                        self._follow_base_mode(mode)
+                        moved = self._follow_base_mode(mode)
                     self.ensure_telemetry_ffb_source()
                 except Exception:
                     logging.exception("MOZA: refreshing the base state after reconnect failed")
+                self._refresh_retries = 0 if moved else self._refresh_retries + 1
+                if (not moved and req is None and self._refresh_retries <= 10
+                        and not self._keepalive_stop.wait(1.0)):
+                    with self._mode_req_lock:       # effects not moved: try again shortly
+                        self._refresh_req = True
             if req is not None:
                 try:
                     ok = self.set_base_mode(req[0])
@@ -865,13 +890,23 @@ class MozaFFBDevice(DInputFFBDevice):
                 time.sleep(0.1)
         return actual
 
-    def _follow_base_mode(self, mode: str):
-        if mode != self._base_mode:
-            self._base_mode = mode
-            # move the effects to the other channel: drop every device effect; their
-            # HapticEffect owners re-create them (now on the new channel) on next start
+    def _follow_base_mode(self, mode: str) -> bool:
+        """Put the effect channel on ``mode``.  Returns False while the move of the
+        existing effects is not complete (it is retried on the next call)."""
+        if mode == self._base_mode and not self._migration_pending:
+            return True
+        self._base_mode = mode
+        self._migration_pending = True
+        # move the effects to the other channel: drop every device effect; their
+        # HapticEffect owners re-create them (now on the new channel) on next start
+        try:
             self.reset_effects()
-            logging.info(f"MOZA: effects now via {self._channel_name()}")
+        except Exception:
+            logging.exception(f"MOZA: moving the effects to {self._channel_name()} failed; will retry")
+            return False
+        self._migration_pending = False
+        logging.info(f"MOZA: effects now via {self._channel_name()}")
+        return True
 
     def ensure_telemetry_ffb_source(self) -> bool:
         """Make the base render telemetry (MOZA SDK) effects as well as DirectInput ones."""

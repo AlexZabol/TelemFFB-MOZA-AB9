@@ -127,6 +127,8 @@ def _moza_device(sdk, base_mode="FFB"):
     dev._slot_lock = threading.Lock()
     dev.fx_lock = threading.RLock()
     dev._resetting = 0
+    dev._migration_pending = False
+    dev._refresh_retries = 0
     dev.reset_effects = MagicMock()
     dev.connection_generation = 0
     dev._mode_req_lock = threading.Lock()
@@ -552,6 +554,49 @@ def test_failed_directinput_reset_does_not_leave_creation_blocked():
     h = dev.create_effect(EFFECT_SINE)
     assert h                                                  # not deferred forever
     h.effect_id = None
+
+
+@pytest.mark.unit
+def test_failed_effect_move_is_not_confirmed_and_retried(monkeypatch):
+    monkeypatch.setattr(ffb_moza.time, "sleep", lambda s: None)
+    sdk = _ParamSdk()
+    dev = _moza_device(sdk, base_mode="FFB")
+    dev.reset_effects = MagicMock(side_effect=[OSError("effect_destroy"), None])
+    assert not dev.set_base_mode("FS")          # base switched, effects not moved: not done
+    assert dev._migration_pending
+    assert dev.set_base_mode("FS")              # retry repeats the move
+    assert dev.reset_effects.call_count == 2 and not dev._migration_pending
+    assert dev.set_base_mode("FS")              # nothing left to move
+    assert dev.reset_effects.call_count == 2
+
+
+@pytest.mark.unit
+def test_directinput_reset_failure_invalidates_its_effects():
+    sdk = _ParamSdk()
+    dev = _moza_device(sdk, base_mode="FFB")
+    del dev.reset_effects
+    dev._invalidate_effects = MagicMock()
+    from telemffb.hw.ffb_dinput import DInputFFBDevice
+    import unittest.mock as um
+    with um.patch.object(DInputFFBDevice, "reset_effects", side_effect=OSError("effect_destroy")):
+        with pytest.raises(OSError):
+            dev.reset_effects()
+    dev._invalidate_effects.assert_called_once()   # owners re-create on the current channel
+
+
+@pytest.mark.unit
+def test_exception_during_open_releases_the_sdk_registration(monkeypatch):
+    import threading
+    monkeypatch.setattr(ffb_moza, "_SDK_USERS", [0])
+    s = ffb_moza.MozaSdk.__new__(ffb_moza.MozaSdk)
+    s._lock = threading.RLock()
+    s._L = MagicMock()
+    s._L.Moza_Initialize.return_value = 0
+    s._L.Moza_DeviceGetList.side_effect = OSError("access violation")
+    with pytest.raises(OSError):
+        s.open(timeout_s=0)
+    assert ffb_moza._SDK_USERS[0] == 0
+    s._L.Moza_Shutdown.assert_called_once()
 
 
 @pytest.mark.unit
