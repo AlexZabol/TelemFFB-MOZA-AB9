@@ -271,11 +271,17 @@ class UpdateWorker(QThread):
     def run(self):
         try:
             zip_path = self._download()
+            self._validate_zip(zip_path)
             self.progress.emit(0)
             self._wait_for_app_exit()
             self._backup()
             self.progress.emit(0)
-            self._extract(zip_path)
+            try:
+                self._extract(zip_path)
+            except Exception:
+                self.status.emit("Install failed - restoring the previous version...")
+                self._restore_backup()
+                raise
             if self.debug_zip is None:
                 os.remove(zip_path)
             self.progress.emit(100)
@@ -296,8 +302,9 @@ class UpdateWorker(QThread):
         zip_fd, zip_path = tempfile.mkstemp(suffix=".zip", prefix="telemffb_update_")
         os.close(zip_fd)
 
-        ctx = ssl._create_unverified_context()
-        resp = urllib.request.urlopen(self.url, context=ctx)
+        # verified TLS: the archive is installed as executable code
+        ctx = ssl.create_default_context()
+        resp = urllib.request.urlopen(self.url, context=ctx, timeout=60)
         total = int(resp.headers.get("Content-Length", 0))
         received = 0
 
@@ -314,6 +321,43 @@ class UpdateWorker(QThread):
         self.progress.emit(100)
         self.log.emit(f"Download complete ({received:,} bytes).")
         return zip_path
+
+    def _validate_zip(self, zip_path):
+        """Check the archive before anything in the installation is touched:
+        it must be a readable zip with the executable at its top level."""
+        self.status.emit("Checking the update package...")
+        try:
+            with ZipFile(zip_path, "r") as zf:
+                bad = zf.testzip()
+                names = {n.replace("\\", "/").lstrip("./") for n in zf.namelist()}
+        except Exception as e:
+            raise RuntimeError(f"The downloaded update is not a valid zip archive ({e}).\n\n"
+                               "No changes have been made to your installation.") from e
+        if bad is not None:
+            raise RuntimeError(f"The downloaded update is damaged ({bad}).\n\n"
+                               "No changes have been made to your installation.")
+        if EXECUTABLE_NAME not in names:
+            raise RuntimeError(f"The downloaded update does not contain {EXECUTABLE_NAME}.\n\n"
+                               "No changes have been made to your installation.")
+        self.log.emit("Update package checked.")
+
+    def _restore_backup(self):
+        """After a failed install, put the backed-up version back (best effort)."""
+        backup_path = os.path.join(self.app_path, BACKUP_FOLDER)
+        for name in OWNED_ENTRIES:
+            saved = os.path.join(backup_path, name)
+            if not os.path.lexists(saved):
+                continue
+            target = os.path.join(self.app_path, name)
+            try:
+                if os.path.isdir(target) and not os.path.islink(target):
+                    _remove_tree_with_retry(target)
+                elif os.path.lexists(target):
+                    os.remove(target)
+                _move_with_retry(saved, target, log=self.log.emit)
+                self.log.emit(f"  Restored: {name}")
+            except OSError as e:
+                self.log.emit(f"  Could not restore {name}: {e} (a copy is in {backup_path})")
 
     def _wait_for_app_exit(self, timeout=20):
         """Wait for all TelemFFB instances (master and children) to exit

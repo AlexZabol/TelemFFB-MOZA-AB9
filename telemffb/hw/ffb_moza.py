@@ -194,6 +194,16 @@ def apply_base_mode_setting(value) -> bool:
     return ok
 
 
+def select_base(bases, product_id=None):
+    """The SDK flight base to drive: the only one, or the only one with ``product_id``."""
+    if len(bases) == 1:
+        return bases[0]
+    if product_id is None:
+        return None
+    match = [b for b in bases if getattr(b, "productId", None) == product_id]
+    return match[0] if len(match) == 1 else None
+
+
 class MozaSdk:
     """Minimal thread-safe ctypes wrapper around MOZA_SDK.dll for one flight base."""
 
@@ -234,7 +244,10 @@ class MozaSdk:
             logging.debug("MOZA SDK: log callback not set", exc_info=True)
 
     # -- connection -----------------------------------------------------------------
-    def open(self, timeout_s: float = 10.0) -> bool:
+    def open(self, timeout_s: float = 10.0, product_id: Optional[int] = None) -> bool:
+        """Open the flight base.  One base: that one.  Several: only the single one whose
+        USB product id matches the DirectInput device (``product_id``); otherwise fail,
+        so the caller keeps plain DirectInput rather than drive a different base."""
         with self._lock:
             e = self._L.Moza_Initialize()
             if e not in (_ERR_OK, _ERR_ALREADY_INITIALIZED):
@@ -252,10 +265,16 @@ class MozaSdk:
             arr = (_DevInfo * max(n.value, 1))()
             cap = c_uint32(n.value)
             self._L.Moza_DeviceGetList(arr, byref(cap))
-            dev = next((arr[i] for i in range(cap.value)
-                        if arr[i].category == _DC_AS and arr[i].type & _DT_AS_FLIGHTBASE), None)
+            bases = [arr[i] for i in range(cap.value)
+                     if arr[i].category == _DC_AS and arr[i].type & _DT_AS_FLIGHTBASE]
+            dev = select_base(bases, product_id)
             if dev is None:
-                logging.warning("MOZA SDK: no flight base found")
+                if not bases:
+                    logging.warning("MOZA SDK: no flight base found")
+                else:
+                    logging.warning(f"MOZA SDK: {len(bases)} flight bases found and none matches the "
+                                    f"selected device uniquely (product id {product_id!r}) - "
+                                    "using plain DirectInput")
                 self._L.Moza_Shutdown()
                 return False
             h = c_void_p()
@@ -368,8 +387,12 @@ class MozaEffectHandle(ffb_backend.BaseEffectHandle):
         self.effect_id = slot
         self.type = effect_type
         self._started = False
+        self._ends_at = None           # monotonic end time of a finite-duration effect
+        self._duration_ms = None       # duration of the last parameter set (None = infinite)
         self._last_cmd = None          # (cmd, specs) last parameter set, re-sent by the keepalive
         self._last_env = None
+        # one lock per device: a keepalive refresh never interleaves with stop/free/reset
+        self._lock = getattr(device, "fx_lock", None) or threading.RLock()
 
     def __bool__(self):
         return bool(self.effect_id and self.type)
@@ -383,50 +406,74 @@ class MozaEffectHandle(ffb_backend.BaseEffectHandle):
 
     @property
     def started(self):
+        # a finite effect (e.g. the 40 ms gear clunk) has stopped playing on the base by
+        # itself; report it so the next HapticEffect.start() sends OP_START again
+        if self._started and self._ends_at is not None and time.monotonic() >= self._ends_at:
+            self._started = False
+            self._ends_at = None
         return self._started
 
     def invalidate(self):
-        self.effect_id = 0
-        self._started = False
+        with self._lock:
+            self.effect_id = 0
+            self._started = False
+            self._ends_at = None
 
     def forget_playback(self):
         self._started = False
+        self._ends_at = None
 
-    def _send(self, cmd, specs):
-        if not self.effect_id:
-            return
-        self._last_cmd = (cmd, specs)
-        self.device.sdk.send(cmd, specs)
+    def _send(self, cmd, specs, duration_ms=None):
+        with self._lock:
+            if not self.effect_id:
+                return
+            if self.started and self._last_cmd == (cmd, specs):
+                return      # unchanged while playing - the keepalive refreshes it anyway
+            self._last_cmd = (cmd, specs)
+            self._duration_ms = duration_ms
+            self.device.sdk.send(cmd, specs)
 
     def resend(self):
         """Keepalive refresh: re-send the last parameters of a playing effect."""
-        if self._started and self._last_cmd and self.effect_id:
-            self.device.sdk.send(*self._last_cmd)
+        with self._lock:
+            if self.effect_id and self._last_cmd and self.started:
+                self.device.sdk.send(*self._last_cmd)
 
     def start(self, loopCount=1, override=False):
-        if not self.effect_id:
-            logging.warning(f"start on an invalidated effect ({self.name})")
+        with self._lock:
+            if not self.effect_id:
+                logging.warning(f"start on an invalidated effect ({self.name})")
+                return self
+            if self._last_cmd:
+                self.device.sdk.send(*self._last_cmd)
+            e, _ = self.device.sdk.send(CMD_OPERATION, [("u", self.effect_id), ("u", OP_START)])
+            if e not in (_ERR_OK, _ERR_PENDING, _ERR_BUSY):
+                logging.warning(f"MOZA: start of {self.name} (slot {self.effect_id}) failed (err {e})")
+                self._started = False
+                return self
+            self._started = True
+            self._ends_at = (time.monotonic() + self._duration_ms / 1000.0
+                             if self._duration_ms else None)
             return self
-        if self._last_cmd:
-            self.device.sdk.send(*self._last_cmd)
-        self.device.sdk.send(CMD_OPERATION, [("u", self.effect_id), ("u", OP_START)])
-        self._started = True
-        return self
 
     def stop(self):
-        if self.effect_id and self._started:
-            self.device.sdk.send(CMD_OPERATION, [("u", self.effect_id), ("u", OP_STOP)])
-        self._started = False
-        return self
+        with self._lock:
+            if self.effect_id and self._started:
+                self.device.sdk.send(CMD_OPERATION, [("u", self.effect_id), ("u", OP_STOP)])
+            self._started = False
+            self._ends_at = None
+            return self
 
     def destroy(self):
-        if self.effect_id:
-            self.device.sdk.send(CMD_OPERATION, [("u", self.effect_id), ("u", OP_STOP)])
-            self.device.sdk.send(CMD_OPERATION, [("u", self.effect_id), ("u", OP_FREE)])
-            self.device.release_slot(self.effect_id)
-            self.effect_id = None
-            self.type = 0
-            self._started = False
+        with self._lock:
+            if self.effect_id:
+                self.device.sdk.send(CMD_OPERATION, [("u", self.effect_id), ("u", OP_STOP)])
+                self.device.sdk.send(CMD_OPERATION, [("u", self.effect_id), ("u", OP_FREE)])
+                self.device.release_slot(self.effect_id)
+                self.effect_id = None
+                self.type = 0
+                self._started = False
+                self._ends_at = None
 
     def __del__(self):
         try:
@@ -470,7 +517,8 @@ class MozaEffectHandle(ffb_backend.BaseEffectHandle):
         phase = int(round(int(kwargs.get("phase", 0)) * 360 / 255)) % 360
         self._send(CMD_PERIODIC, [("u", self.effect_id), ("i", mag), ("i", offset), ("u", phase),
                                   ("u", max(1, period)), ("u", dur), ("u", AXIS_DIRECTION_ENABLE),
-                                  ("u", self._dir(direction)), ("u", 0)])
+                                  ("u", self._dir(direction)), ("u", 0)],
+                   duration_ms=None if dur == DURATION_INFINITE else dur)
         return self
 
     def setRamp(self, start, end, direction, duration=0):
@@ -479,7 +527,8 @@ class MozaEffectHandle(ffb_backend.BaseEffectHandle):
         e = int(round(_clamp(end, -1.0, 1.0) * FULL_SCALE)) & 0xFFFF
         dur = DURATION_INFINITE if not duration else int(_clamp(duration, 1, DURATION_INFINITE - 1))
         self._send(CMD_RAMP, [("u", self.effect_id), ("u", s), ("u", e), ("u", dur),
-                              ("u", AXIS_DIRECTION_ENABLE), ("u", self._dir(direction)), ("u", 0)])
+                              ("u", AXIS_DIRECTION_ENABLE), ("u", self._dir(direction)), ("u", 0)],
+                   duration_ms=None if dur == DURATION_INFINITE else dur)
         return self
 
     def setEnvelope(self, envelope: FFBReport_SetEnvelope):
@@ -501,6 +550,7 @@ class MozaFFBDevice(DInputFFBDevice):
         self._free_slots = set(range(SLOT_MIN, SLOT_MAX + 1))
         self._moza_handles: list = []
         self._slot_lock = threading.Lock()
+        self.fx_lock = threading.RLock()     # serialises effect sends, stop/free and reset
         self._keepalive_stop = threading.Event()
         super().__init__(guid, **kwargs)
         # Which channel plays the constant/ramp/periodic effects follows the base mode:
@@ -569,35 +619,64 @@ class MozaFFBDevice(DInputFFBDevice):
 
     def reset_effects(self):
         super().reset_effects()
-        for h in self._live_moza_handles():
-            h.invalidate()
-        with self._slot_lock:
-            self._free_slots = set(range(SLOT_MIN, SLOT_MAX + 1))
-        self.sdk.send(CMD_CONTROL, [("i", 2)], sync=True)
-        self.sdk.send(CMD_CONTROL, [("i", 1)], sync=True)
-        self.sdk.send(CMD_CONTROL, [("i", 3)], sync=True)
+        with self.fx_lock:
+            for h in self._live_moza_handles():
+                h.invalidate()
+            with self._slot_lock:
+                self._free_slots = set(range(SLOT_MIN, SLOT_MAX + 1))
+            self.sdk.send(CMD_CONTROL, [("i", 2)], sync=True)
+            self.sdk.send(CMD_CONTROL, [("i", 1)], sync=True)
+            self.sdk.send(CMD_CONTROL, [("i", 3)], sync=True)
 
     # -- base mode -------------------------------------------------------------------
     def set_base_mode(self, mode: str) -> bool:
         """Switch the base to "FFB" (Force Feedback) or "FS" (Force Sensing).
-        Returns True when the request was accepted.  Effects keep working in both
-        modes (the keepalive poll is what matters)."""
-        value = BASE_MODES.get(str(mode).upper())
+        Returns True only when the base confirms the new mode (read back) and the FFB
+        source was set.  The effect channel always follows the mode the base actually
+        reports, never the one merely requested."""
+        mode = str(mode).upper()
+        value = BASE_MODES.get(mode)
         if value is None or not self.sdk.is_open:
             return False
         e = self.sdk.set_param_uint(PARAM_STEER_FORCE_MODE, value)
         if e not in (_ERR_OK, _ERR_PENDING, _ERR_BUSY):
             logging.warning(f"MOZA: setting base mode {mode} failed (err {e})")
             return False
-        self.ensure_telemetry_ffb_source()
-        mode = str(mode).upper()
+        actual = self._read_base_mode(expect=value)
+        source_ok = self.ensure_telemetry_ffb_source()
+        if actual is None:
+            logging.warning(f"MOZA: base did not report its mode after switching to {mode}; "
+                            f"effects stay via {self._channel_name()}")
+            return False
+        self._follow_base_mode(actual)
+        if actual != mode:
+            logging.warning(f"MOZA: base mode {mode} requested, base reports "
+                            f"{'Force Sensing' if actual == 'FS' else 'Force Feedback'}")
+            return False
+        return source_ok
+
+    def _read_base_mode(self, expect=None, attempts=4, timeout_ms=500) -> Optional[str]:
+        """Read Main_SteerForceMode from the base ("FFB" / "FS"), None if unreadable.
+        With ``expect``, re-read briefly until the base reports that value (the write
+        is asynchronous)."""
+        actual = None
+        for i in range(attempts):
+            v = self.sdk.get_param_int(PARAM_STEER_FORCE_MODE, timeout_ms=timeout_ms)
+            if v is not None:
+                actual = "FS" if v == 1 else "FFB"
+                if expect is None or v == expect:
+                    return actual
+            if i + 1 < attempts:
+                time.sleep(0.1)
+        return actual
+
+    def _follow_base_mode(self, mode: str):
         if mode != self._base_mode:
             self._base_mode = mode
             # move the effects to the other channel: drop every device effect; their
             # HapticEffect owners re-create them (now on the new channel) on next start
             self.reset_effects()
             logging.info(f"MOZA: effects now via {self._channel_name()}")
-        return True
 
     def ensure_telemetry_ffb_source(self) -> bool:
         """Make the base render telemetry (MOZA SDK) effects as well as DirectInput ones."""
@@ -607,7 +686,14 @@ class MozaFFBDevice(DInputFFBDevice):
         if e not in (_ERR_OK, _ERR_PENDING, _ERR_BUSY):
             logging.warning(f"MOZA: setting FFB source (Main_CtrlModeSet=2) failed (err {e})")
             return False
-        return True
+        for i in range(4):          # confirm (the write is asynchronous)
+            v = self.sdk.get_param_int(PARAM_CTRL_MODE, timeout_ms=500)
+            if v == CTRL_MODE_TELEMETRY_AND_DINPUT:
+                return True
+            if i < 3:
+                time.sleep(0.1)
+        logging.warning(f"MOZA: FFB source not confirmed (Main_CtrlModeSet reads {v})")
+        return False
 
     # -- keepalive -------------------------------------------------------------------
     def _keepalive_loop(self):
@@ -627,6 +713,9 @@ class MozaFFBDevice(DInputFFBDevice):
 
     def shutdown(self):
         self._keepalive_stop.set()
+        ka = getattr(self, "_keepalive", None)
+        if ka is not None and ka.is_alive() and ka is not threading.current_thread():
+            ka.join(timeout=2.0)     # no keepalive send may reach a closed SDK
         try:
             for h in self._live_moza_handles():
                 h.stop()
@@ -651,7 +740,7 @@ def open_moza_or_none(guid: str, info=None) -> Optional[MozaFFBDevice]:
         return None
     try:
         sdk = MozaSdk(dll)
-        if not sdk.open():
+        if not sdk.open(product_id=getattr(info, "product_id", None)):
             return None
     except Exception:
         logging.exception("MOZA SDK load failed - using plain DirectInput")
