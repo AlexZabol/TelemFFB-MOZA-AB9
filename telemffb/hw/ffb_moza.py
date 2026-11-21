@@ -275,12 +275,14 @@ class MozaSdk:
         (``product_id``); fail when there is no single match, so the caller keeps plain
         DirectInput rather than drive a different base."""
         with self._lock:
-            e = self._L.Moza_Initialize()
-            if e not in (_ERR_OK, _ERR_ALREADY_INITIALIZED):
-                logging.warning(f"MOZA SDK: Moza_Initialize failed ({e}); is MOZA DeviceService installed "
-                                "and the MOZA Cockpit window closed?")
-                return False
+            # initialise and register as a user under the lock the last Shutdown takes, so
+            # an old instance closing meanwhile cannot shut the SDK down under us
             with _SDK_INIT_LOCK:
+                e = self._L.Moza_Initialize()
+                if e not in (_ERR_OK, _ERR_ALREADY_INITIALIZED):
+                    logging.warning(f"MOZA SDK: Moza_Initialize failed ({e}); is MOZA DeviceService installed "
+                                    "and the MOZA Cockpit window closed?")
+                    return False
                 _SDK_USERS[0] += 1
             t0 = time.monotonic()
             n = c_uint32(0)
@@ -722,10 +724,15 @@ class MozaFFBDevice(DInputFFBDevice):
         # handles send nothing.
         with self.fx_lock:
             self._resetting += 1
-            super().reset_effects()
-            for h in self._live_moza_handles():
-                h.invalidate()
+        dinput_error = None
         try:
+            with self.fx_lock:
+                for h in self._live_moza_handles():
+                    h.invalidate()
+                try:
+                    super().reset_effects()
+                except Exception as ex:     # DirectInput failed: still reset the SDK side,
+                    dinput_error = ex       # then report it to the caller as before
             e, _ = self.sdk.send(CMD_CONTROL, [("i", 2)], sync=True)
             if e == _ERR_OK:
                 with self._slot_lock:       # the base freed every effect: all slots are free
@@ -740,6 +747,8 @@ class MozaFFBDevice(DInputFFBDevice):
         finally:
             with self.fx_lock:
                 self._resetting -= 1
+        if dinput_error is not None:
+            raise dinput_error
 
     # -- base mode -------------------------------------------------------------------
     def set_base_mode(self, mode: str) -> bool:
@@ -922,24 +931,34 @@ def same_model_count(info, devices) -> int:
                if (getattr(d, "vendor_id", None), getattr(d, "product_id", None)) == key)
 
 
+def sdk_backend_blocker(info, devices=None) -> Optional[str]:
+    """Why the MOZA SDK backend would not be used for DirectInput device ``info``
+    (None = it would be).  The one check behind both the backend and the
+    MOZA_SDK.dll download offer."""
+    if os.environ.get("TELEMFFB_MOZA_DISABLE"):
+        return "MOZA backend disabled (TELEMFFB_MOZA_DISABLE)"
+    if info is None:
+        return None
+    if not is_ab9(info):
+        # other MOZA bases have no Force Sensing mode: like the official TelemFFB
+        return f"'{getattr(info, 'product_string', '?')}' is not an AB9"
+    n = same_model_count(info, devices)
+    if n > 1:
+        # two bases of one model: USB ids cannot tell which physical unit the SDK would
+        # open, so never risk driving the other one
+        return (f"{n} devices with USB id {info.vendor_id:04X}:{info.product_id:04X} - cannot match "
+                "the SDK base to the selected one")
+    return None
+
+
 def open_moza_or_none(guid: str, info=None, devices=None) -> Optional[MozaFFBDevice]:
     """Return a MozaFFBDevice for a MOZA DirectInput device when the MOZA SDK is usable,
     else None (the caller falls back to plain DirectInput)."""
-    if os.environ.get("TELEMFFB_MOZA_DISABLE"):
-        return None
     if info is not None and not is_moza_device(info):
         return None
-    if info is not None and not is_ab9(info):
-        # other MOZA bases have no Force Sensing mode: plain DirectInput, exactly like
-        # the official TelemFFB
-        logging.info(f"MOZA: '{getattr(info, 'product_string', '?')}' is not an AB9 - using plain DirectInput")
-        return None
-    if info is not None and same_model_count(info, devices) > 1:
-        # two bases of one model: USB ids cannot tell which physical unit the SDK would
-        # open, so never risk driving the other one
-        logging.warning(f"MOZA: {same_model_count(info, devices)} devices with USB id "
-                        f"{info.vendor_id:04X}:{info.product_id:04X} - cannot match the SDK base "
-                        "to the selected one; using plain DirectInput")
+    reason = sdk_backend_blocker(info, devices)
+    if reason:
+        logging.info(f"MOZA: {reason} - using plain DirectInput")
         return None
     dll = sdk_dll_path()
     if not dll:

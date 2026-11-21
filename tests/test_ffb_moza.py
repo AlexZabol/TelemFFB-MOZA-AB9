@@ -538,6 +538,76 @@ def test_close_never_runs_while_a_native_call_is_in_flight(monkeypatch):
 
 
 @pytest.mark.unit
+def test_failed_directinput_reset_does_not_leave_creation_blocked():
+    sdk = _ParamSdk()
+    dev = _moza_device(sdk, base_mode="FS")
+    del dev.reset_effects
+    from telemffb.hw.ffb_dinput import DInputFFBDevice
+    import unittest.mock as um
+    with um.patch.object(DInputFFBDevice, "reset_effects", side_effect=OSError("bridge fault")):
+        with pytest.raises(OSError):
+            dev.reset_effects()
+    assert dev._resetting == 0
+    assert (ffb_moza.CMD_CONTROL, [("i", 2)]) in sdk.sent    # the SDK side was still reset
+    h = dev.create_effect(EFFECT_SINE)
+    assert h                                                  # not deferred forever
+    h.effect_id = None
+
+
+@pytest.mark.unit
+def test_initialize_and_last_shutdown_cannot_interleave(monkeypatch):
+    """A new instance's Initialize + registration and an old instance's last Shutdown
+    are serialised by the same lock."""
+    import threading
+    monkeypatch.setattr(ffb_moza, "_SDK_USERS", [1])
+    old = _bare_sdk()
+    order = []
+    in_shutdown, go_on = threading.Event(), threading.Event()
+
+    def slow_shutdown():
+        in_shutdown.set()
+        go_on.wait(5)
+        order.append("shutdown")
+    old._L.Moza_Shutdown.side_effect = slow_shutdown
+    new = ffb_moza.MozaSdk.__new__(ffb_moza.MozaSdk)
+    new._lock = threading.RLock()
+    new._L = MagicMock()
+    new._L.Moza_Initialize.side_effect = lambda: order.append("init") or 0
+    new._L.Moza_DeviceGetList.side_effect = lambda arr, n: order.append("enumerate")
+    t = threading.Thread(target=old.close)
+    t.start()
+    assert in_shutdown.wait(2)
+    o = threading.Thread(target=lambda: new.open(timeout_s=0))
+    o.start()
+    o.join(0.3)
+    assert "init" not in order                 # waits for the shutdown to finish
+    go_on.set()
+    t.join(2)
+    o.join(2)
+    assert order[:2] == ["shutdown", "init"]
+    assert ffb_moza._SDK_USERS[0] == 0          # no base found -> released again
+
+
+@pytest.mark.unit
+def test_backend_and_download_offer_share_one_check(monkeypatch):
+    from types import SimpleNamespace as NS
+    import telemffb.globals as G
+    from telemffb.hw.ffb_dinput import DInputFFBDevice
+    from telemffb.ui.dialogs import moza_sdk_offer as offer
+    a = NS(guid="a", vendor_id=0x346E, product_id=0x1000, product_string="MOZA AB9 FFB Base")
+    b = NS(guid="b", vendor_id=0x346E, product_id=0x1000, product_string="MOZA AB9 FFB Base")
+    monkeypatch.delenv("TELEMFFB_MOZA_DISABLE", raising=False)
+    monkeypatch.setattr(G, "device_usbpid", None, raising=False)
+    monkeypatch.setattr(G, "device_di_guid", "a", raising=False)
+    monkeypatch.setattr(DInputFFBDevice, "enumerate", staticmethod(lambda: [a, b]))
+    assert ffb_moza.sdk_backend_blocker(a, [a, b])           # two identical AB9: backend off ...
+    assert not offer.moza_sdk_wanted()                       # ... so no download offer either
+    monkeypatch.setattr(DInputFFBDevice, "enumerate", staticmethod(lambda: [a]))
+    assert ffb_moza.sdk_backend_blocker(a, [a]) is None
+    assert offer.moza_sdk_wanted()
+
+
+@pytest.mark.unit
 def test_sdk_shutdown_only_with_the_last_user(monkeypatch):
     monkeypatch.setattr(ffb_moza, "_SDK_USERS", [2])     # an old and a new device
     a = _bare_sdk()

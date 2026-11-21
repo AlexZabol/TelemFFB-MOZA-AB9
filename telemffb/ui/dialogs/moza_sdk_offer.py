@@ -19,6 +19,8 @@ def moza_sdk_wanted() -> bool:
     MOZA AB9 (the only MOZA base with Force Sensing)."""
     if os.environ.get("TELEMFFB_MOZA_DISABLE"):
         return False
+    # same check as the backend (ffb_moza.sdk_backend_blocker): AB9 only, never
+    # with two identical AB9s
     guid = getattr(G, "device_di_guid", None)
     if not guid and getattr(G, "device_usbpid", None):
         return False                        # a configured HID (VPforce) device
@@ -28,9 +30,11 @@ def moza_sdk_wanted() -> bool:
     except Exception:
         logging.debug("MOZA SDK offer: DirectInput enumeration failed", exc_info=True)
         return False
+    def usable(d):
+        return ffb_moza.is_moza_device(d) and ffb_moza.sdk_backend_blocker(d, devices) is None
     if guid:
-        return any(d.guid == guid and ffb_moza.is_ab9(d) for d in devices)
-    return any(ffb_moza.is_ab9(d) for d in devices)
+        return any(d.guid == guid and usable(d) for d in devices)
+    return any(usable(d) for d in devices)
 
 
 def offer_moza_sdk_download(parent=None) -> bool:
