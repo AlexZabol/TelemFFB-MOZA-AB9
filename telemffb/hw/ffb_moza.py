@@ -740,12 +740,24 @@ class MozaFFBDevice(DInputFFBDevice):
         with self.fx_lock:
             self._resetting += 1
         dinput_error = None
+        dinput_ok = True
         try:
             with self.fx_lock:
                 for h in self._live_moza_handles():
                     h.invalidate()
                 try:
+                    # destroy the DirectInput effects first, checking each result (the base
+                    # class ignores it); then the base class does the rest of its reset
+                    failed = self._destroy_dinput_effects()
                     super().reset_effects()
+                    if failed:
+                        dinput_ok = False
+                        try:
+                            raise OSError(f"DirectInput effect_destroy failed: {failed}")
+                        except OSError:
+                            # a native effect may still exist: re-open the device, which
+                            # frees them all (DirectInput's own recovery)
+                            self._note_native_fault("reset_effects")
                 except Exception as ex:     # DirectInput failed: still reset the SDK side,
                     dinput_error = ex       # then report it to the caller as before
                     # some native effects may not have been freed: use DirectInput's own
@@ -775,7 +787,21 @@ class MozaFFBDevice(DInputFFBDevice):
                 self._resetting -= 1
         if dinput_error is not None:
             raise dinput_error
-        return ok
+        return ok and dinput_ok
+
+    def _destroy_dinput_effects(self) -> list:
+        """Destroy and invalidate every live DirectInput effect; returns the
+        (effect id, return code) pairs the bridge did not confirm."""
+        from telemffb.hw.ffb_dinput import DIB_OK
+        failed = []
+        for ref in list(getattr(self, "_effect_handles", ())):
+            effect = ref()
+            if effect and effect.effect_id:
+                rc = self.bridge.effect_destroy(effect.effect_id)
+                if rc != DIB_OK:
+                    failed.append((effect.effect_id, rc))
+                effect.invalidate()
+        return failed
 
     # -- base mode -------------------------------------------------------------------
     def set_base_mode(self, mode: str) -> bool:
@@ -860,9 +886,9 @@ class MozaFFBDevice(DInputFFBDevice):
                 moved = False
                 try:
                     mode = self._read_base_mode()
-                    if mode is not None:
-                        moved = self._follow_base_mode(mode)
-                    moved = self.ensure_telemetry_ffb_source() and moved
+                    followed = mode is not None and self._follow_base_mode(mode)
+                    source_ok = self.ensure_telemetry_ffb_source()
+                    moved = bool(followed and source_ok)        # set only once both checks ran
                 except Exception:
                     logging.exception("MOZA: refreshing the base state after reconnect failed")
                 self._refresh_retries = 0 if moved else self._refresh_retries + 1
@@ -884,6 +910,7 @@ class MozaFFBDevice(DInputFFBDevice):
             # re-opened (Qt timer, main thread): the base may have been power-cycled or
             # changed by Cockpit - re-read it on the worker thread, not here
             self.connection_generation += 1
+            self._refresh_retries = 0           # a new connection gets the full retry budget
             self.request_refresh()
 
     def _read_base_mode(self, expect=None, attempts=4, timeout_ms=500) -> Optional[str]:

@@ -129,6 +129,7 @@ def _moza_device(sdk, base_mode="FFB"):
     dev._resetting = 0
     dev._migration_pending = False
     dev._refresh_retries = 0
+    dev._effect_handles = []        # DirectInput handles (none in these tests)
     dev.reset_effects = MagicMock()
     dev.connection_generation = 0
     dev._mode_req_lock = threading.Lock()
@@ -587,6 +588,68 @@ def test_directinput_reset_failure_uses_directinput_recovery():
     # handles invalidated and a device re-open requested: the re-open frees every
     # native effect, also the one whose destroy failed
     assert dev._native_fault and dev._reconnect_requested
+
+
+@pytest.mark.unit
+def test_directinput_destroy_error_code_triggers_recovery(monkeypatch):
+    monkeypatch.setattr(ffb_moza.time, "sleep", lambda s: None)
+    from telemffb.hw.ffb_dinput import DInputFFBDevice, DIB_ERR_GENERAL
+    import unittest.mock as um
+    sdk = _ParamSdk()
+    dev = _moza_device(sdk, base_mode="FFB")
+    del dev.reset_effects
+    dev._native_fault = False
+    dev._reconnecting = False
+    dev._reconnect_requested = False
+    old = MagicMock(effect_id=7)
+    old.invalidate.side_effect = lambda: setattr(old, "effect_id", 0)
+    dev._effect_handles = [lambda o=old: o]       # stands in for a weakref to the handle
+    dev.bridge = MagicMock()
+    dev.bridge.effect_destroy.return_value = DIB_ERR_GENERAL
+    with um.patch.object(DInputFFBDevice, "reset_effects"):
+        assert not dev.set_base_mode("FS")        # not confirmed: the native effect may live on
+        assert dev._migration_pending
+        assert dev._reconnect_requested           # DirectInput recovery: re-open frees it
+        assert old.effect_id == 0
+        assert dev.set_base_mode("FS")            # after that nothing is left to destroy
+        assert not dev._migration_pending
+
+
+@pytest.mark.unit
+def test_refresh_retries_when_the_ffb_source_check_raises(monkeypatch):
+    from telemffb.hw.ffb_dinput import DInputFFBDevice
+    monkeypatch.setattr(ffb_moza.time, "sleep", lambda s: None)
+    sdk = _ParamSdk()
+    dev = _moza_device(sdk, base_mode="FFB")
+    calls = []
+    real = dev.ensure_telemetry_ffb_source
+
+    def flaky():
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError("sdk")
+        return real()
+    dev.ensure_telemetry_ffb_source = flaky
+    dev._reconnecting, dev._shutdown = False, False
+    dev._keepalive_stop.wait = lambda t: False
+    monkeypatch.setattr(DInputFFBDevice, "_try_reconnect", lambda self: None)
+    dev._try_reconnect()
+    dev._mode_worker.join(5)
+    assert len(calls) == 2
+
+
+@pytest.mark.unit
+def test_new_connection_resets_the_refresh_retry_budget(monkeypatch):
+    from telemffb.hw.ffb_dinput import DInputFFBDevice
+    monkeypatch.setattr(ffb_moza.time, "sleep", lambda s: None)
+    sdk = _ParamSdk()
+    dev = _moza_device(sdk, base_mode="FFB")
+    dev._refresh_retries = 11                    # an earlier connection used it all up
+    dev._reconnecting, dev._shutdown = False, False
+    monkeypatch.setattr(DInputFFBDevice, "_try_reconnect", lambda self: None)
+    dev._try_reconnect()
+    assert dev._refresh_retries == 0
+    dev._mode_worker.join(5)
 
 
 @pytest.mark.unit
