@@ -43,8 +43,8 @@ the base accepts every command and produces no force, in either mode.
 ## Build from source
 Requires Windows x64 and Python 3.12 (64-bit).
 ```powershell
-git clone -b moza https://github.com/AlexZabol/VPforce-TelemFFB.git   # or download the "moza" branch as a zip
-cd VPforce-TelemFFB
+git clone -b moza https://github.com/AlexZabol/TelemFFB-MOZA-AB9.git   # or download the "moza" branch as a zip
+cd TelemFFB-MOZA-AB9
 py -3.12 -m venv venv
 .\venv\Scripts\pip install -r requirements.txt pyinstaller
 .\venv\Scripts\pyinstaller --noconfirm VPforce-TelemFFB.spec
