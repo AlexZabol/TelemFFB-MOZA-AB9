@@ -1,7 +1,7 @@
 ﻿<#
   Update / install TelemFFB-MOZA from the latest GitHub release of the fork.
 
-  - Downloads the newest release zip of AlexZabol/VPforce-TelemFFB (tags "vX.Y.N").
+  - Downloads the newest release zip of AlexZabol/TelemFFB-MOZA-AB9 (tags "vX.Y.N").
   - Installs it into $InstallDir (default: C:\TelemFFB-MOZA), keeping a backup of the previous version.
   - Copies MOZA_SDK.dll (x64) from your own MOZA SDK download into the install folder
     (the DLL is not redistributed in the release).
@@ -10,7 +10,7 @@
           [-InstallDir C:\TelemFFB-MOZA] [-SdkZip C:\Users\<you>\Downloads\MOZA_SDK_1.0.0.6_en.zip] [-SdkDll path\MOZA_SDK.dll]
 #>
 param(
-  [string]$Repo = "AlexZabol/VPforce-TelemFFB",
+  [string]$Repo = "AlexZabol/TelemFFB-MOZA-AB9",
   [string]$InstallDir = "C:\TelemFFB-MOZA",
   [string]$SdkZip = "",
   [string]$SdkDll = ""

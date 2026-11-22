@@ -18,7 +18,7 @@ only through DirectInput (via DirectLink), which the base ignores in Force Sensi
 
 Other MOZA bases (e.g. AB6) have no Force Sensing mode: with them this fork behaves exactly like the official TelemFFB.
 
-**Download.** [Releases](https://github.com/AlexZabol/VPforce-TelemFFB/releases), named "TelemFFB MOZA 0.1.N".
+**Download.** [Releases](https://github.com/AlexZabol/TelemFFB-MOZA-AB9/releases), named "TelemFFB MOZA 0.1.N".
 A GitHub Action checks the official TelemFFB daily, merges it, runs the tests and publishes a new release when anything changed.
 
 **Install.** See [`moza/INSTALL.txt`](moza/INSTALL.txt) (also inside every release zip). You need MOZA Cockpit,
@@ -28,7 +28,7 @@ DirectLink and `MOZA_SDK.dll`. Details and build steps: [`moza/README.md`](moza/
 At first start TelemFFB MOZA offers to download the official Flight SDK from
 [mozaracing.com](https://mozaracing.com/pages/sdk) and installs the DLL; it can also be copied by hand from your own SDK download.
 
-**Problems with the MOZA part** go to this fork's [Issues](https://github.com/AlexZabol/VPforce-TelemFFB/issues),
+**Problems with the MOZA part** go to this fork's [Issues](https://github.com/AlexZabol/TelemFFB-MOZA-AB9/issues),
 not to VPforce. License: GPL-3.0, like the original ([COPYING.txt](COPYING.txt)).
 
 ---
