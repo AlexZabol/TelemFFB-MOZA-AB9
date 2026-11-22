@@ -1,3 +1,43 @@
+<!-- moza-fork:start -->
+# TelemFFB MOZA (unofficial fork)
+
+> **This is not the official VPforce TelemFFB.** It is an unofficial fork that adds support for the
+> **MOZA AB9** flight base. It is not affiliated with or endorsed by VPforce or MOZA.
+> For the official program, go to [walmis/VPforce-TelemFFB](https://github.com/walmis/VPforce-TelemFFB).
+
+**What it adds.** TelemFFB's telemetry effects (engine rumble, guns, gear, buffeting, ...) play on a MOZA AB9
+in both of the base's modes, **Force Feedback** and **Force Sensing**. The official TelemFFB reaches the AB9
+only through DirectInput (via DirectLink), which the base ignores in Force Sensing mode.
+
+- A MOZA backend ([`telemffb/hw/ffb_moza.py`](telemffb/hw/ffb_moza.py)) that sends effects through the
+  official MOZA Flight SDK in Force Sensing mode and through DirectInput in Force Feedback mode.
+- Basic Settings → **MOZA Base Mode** (Don't change / Force Feedback / Force Sensing), set per sim, class
+  or aircraft like any other setting.
+- On connect, the base's FFB source is set to accept both DirectInput and SDK effects, whatever MOZA Cockpit set.
+- The update check looks at this fork's releases, never the official ones (installing those would remove MOZA support).
+
+Other MOZA bases (e.g. AB6) have no Force Sensing mode: with them this fork behaves exactly like the official TelemFFB.
+
+**Download.** [Releases](https://github.com/AlexZabol/VPforce-TelemFFB/releases), named "TelemFFB MOZA 0.1.N".
+A GitHub Action checks the official TelemFFB daily, merges it, runs the tests and publishes a new release when anything changed.
+
+**Install.** See [`moza/INSTALL.txt`](moza/INSTALL.txt) (also inside every release zip). You need MOZA Cockpit,
+DirectLink and `MOZA_SDK.dll`. Details and build steps: [`moza/README.md`](moza/README.md).
+
+**`MOZA_SDK.dll` is not included** in this repository or the releases, because MOZA does not allow redistributing it.
+At first start TelemFFB MOZA offers to download the official Flight SDK from
+[mozaracing.com](https://mozaracing.com/pages/sdk) and installs the DLL; it can also be copied by hand from your own SDK download.
+
+**Problems with the MOZA part** go to this fork's [Issues](https://github.com/AlexZabol/VPforce-TelemFFB/issues),
+not to VPforce. License: GPL-3.0, like the original ([COPYING.txt](COPYING.txt)).
+
+---
+
+*Below is the original VPforce TelemFFB README, unchanged.*
+
+---
+<!-- moza-fork:end -->
+
 # VPforce TelemFFB
 
 TelemFFB is an open source Python/Qt application that reads telemetry from a flight simulator and turns it into force feedback (FFB) effects on your controls. For simulators without native force feedback it provides the whole FFB implementation, including the spring forces on the stick. For simulators with native force feedback it adds the effects the game does not render itself.
