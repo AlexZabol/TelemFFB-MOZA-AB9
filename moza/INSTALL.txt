@@ -19,21 +19,34 @@ c) MOZA SDK - https://mozaracing.com/pages/sdk (Flight SDK, file MOZA_SDK_x.x.x.
    redistributing it.
 
 
-2. Add MOZA_SDK.dll (once)
---------------------------
-Easiest: just start VPforce-TelemFFB.exe. When MOZA_SDK.dll is missing, TelemFFB offers to
-   download the MOZA Flight SDK from mozaracing.com (about 100 MB) and installs MOZA_SDK.dll
-   next to the exe. Answer "Yes". (It stays there across TelemFFB MOZA updates.)
-   The newest SDK on MOZA's site is used; a version whose checksum TelemFFB MOZA does not
-   know yet is installed only after you confirm it.
+2. Add MOZA_SDK.dll (once, AB9 only)
+------------------------------------
+MOZA_SDK.dll is one file of MOZA's free Flight SDK. MOZA does not allow sharing it, so it is
+not in this zip: you get it from MOZA's website. Choose one way.
 
-Option A - script: right-click "add_moza_sdk.ps1" in this folder > "Run with PowerShell".
-   It finds the MOZA SDK zip in your Downloads folder and copies MOZA_SDK.dll here.
-   (Or run:  powershell -ExecutionPolicy Bypass -File add_moza_sdk.ps1 -SdkZip "C:\path\MOZA_SDK_1.0.0.6_en.zip")
+Automatic (recommended): connect the AB9 and start VPforce-TelemFFB.exe. If MOZA_SDK.dll is
+   missing, TelemFFB asks whether to download the MOZA Flight SDK from mozaracing.com
+   (about 100 MB). Answer "Yes". TelemFFB takes MOZA_SDK.dll out of the download, puts it
+   next to VPforce-TelemFFB.exe and deletes the rest. TelemFFB MOZA updates keep it.
+   - The newest Flight SDK on MOZA's SDK page is used. TelemFFB checks the file's checksum
+     for SDK versions it already knows; for a newer version it shows the version and
+     installs it only if you confirm.
+   - No question appears if no AB9 is found, or if you ticked "Don't ask again" earlier.
+     If the folder is not writable (for example under Program Files), unzip TelemFFB MOZA
+     somewhere else, such as C:\TelemFFB-MOZA. In these cases you can also use the manual way.
 
-Option B - by hand: open the MOZA SDK zip and copy
-   MOZA_SDK\x64-release\bin\MOZA_SDK.dll
-   into this folder, next to VPforce-TelemFFB.exe.
+Manual: download the Flight SDK zip (named MOZA_SDK_<version>_en.zip) from
+   https://mozaracing.com/pages/sdk, then do A or B:
+
+   A - script: right-click "add_moza_sdk.ps1" in this folder > "Run with PowerShell".
+       It takes the newest MOZA_SDK_*.zip in your Downloads folder and copies MOZA_SDK.dll
+       here. If the zip is saved elsewhere, give its path:
+       powershell -ExecutionPolicy Bypass -File add_moza_sdk.ps1 -SdkZip "C:\path\to\MOZA_SDK_<version>_en.zip"
+
+   B - by hand: open the zip and copy
+       MOZA_SDK_<version>\MOZA_SDK\x64-release\bin\MOZA_SDK.dll
+       into this folder, next to VPforce-TelemFFB.exe. Use the x64-release file, not x86
+       or debug.
 
 
 3. Start
