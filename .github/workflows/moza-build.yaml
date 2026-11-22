@@ -62,7 +62,7 @@ jobs:
           UP=$(git rev-parse --short=8 upstream/refactor)
           ME=$(git rev-parse --short=8 HEAD)
           ME_FULL=$(git rev-parse HEAD)
-          git merge --no-edit upstream/refactor
+          bash moza/merge_upstream.sh upstream/refactor
           # upstream release this build is based on, e.g. 3.0.261019
           BASE=$(git describe --tags --abbrev=0 --match '[0-9]*.[0-9]*.[0-9]*' upstream/refactor 2>/dev/null || echo "dev")
           # version = <series from moza/VERSION>.<build number>, e.g. 0.1.3
@@ -106,7 +106,7 @@ jobs:
           git remote add upstream https://github.com/walmis/VPforce-TelemFFB.git
           git fetch --no-tags upstream refactor
           git cat-file -e "$UP_SHA^{commit}" || git fetch --no-tags upstream "$UP_SHA"
-          git merge --no-edit "$UP_SHA"
+          bash moza/merge_upstream.sh "$UP_SHA"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -146,7 +146,7 @@ jobs:
           git remote add upstream https://github.com/walmis/VPforce-TelemFFB.git
           git fetch --no-tags upstream refactor
           git cat-file -e "$UP_SHA^{commit}" || git fetch --no-tags upstream "$UP_SHA"
-          git merge --no-edit "$UP_SHA"
+          bash moza/merge_upstream.sh "$UP_SHA"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
