@@ -10,7 +10,7 @@ import ssl
 import urllib.request
 from typing import Optional, Tuple
 
-REPO = "AlexZabol/VPforce-TelemFFB"
+REPO = "AlexZabol/TelemFFB-MOZA-AB9"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases"
 API_LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"
 _VERSION_RE = re.compile(r"(\d+(?:\.\d+)+)")

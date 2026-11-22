@@ -5,7 +5,7 @@ TelemFFB with MOZA flight base support: telemetry effects (engine rumble, guns, 
 buffeting, ...) play on a MOZA AB9 base (tested), in both Force Feedback and Force Sensing mode.
 Other MOZA bases have no Force Sensing mode; with them TelemFFB MOZA works exactly like the
 official TelemFFB (plain DirectInput) and does not need MOZA_SDK.dll.
-Source and updates: https://github.com/AlexZabol/VPforce-TelemFFB (branch "moza").
+Source and updates: https://github.com/AlexZabol/TelemFFB-MOZA-AB9 (branch "moza").
 
 
 1. Requirements (install once)
@@ -80,7 +80,7 @@ Manual: download the Flight SDK zip (named MOZA_SDK_<version>_en.zip) from
 5. Updating
 -----------
 Accept the update offer at start (or Utilities > Install Latest TelemFFB MOZA). Manually:
-download the newest TelemFFB-MOZA-x.y.z.zip from https://github.com/AlexZabol/VPforce-TelemFFB/releases
+download the newest TelemFFB-MOZA-x.y.z.zip from https://github.com/AlexZabol/TelemFFB-MOZA-AB9/releases
 and unzip it over this folder (MOZA_SDK.dll stays).
 
 
