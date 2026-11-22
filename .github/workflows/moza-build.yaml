@@ -218,8 +218,8 @@ jobs:
 
           Installation: see INSTALL.txt inside the zip.
 
-          MOZA_SDK.dll is not included (no redistribution licence). Install with
-          moza/update_telemffb_moza.ps1, which adds it from your own MOZA SDK download.
+          MOZA_SDK.dll is not included (no redistribution licence). For an AB9, TelemFFB
+          offers to download it from mozaracing.com at first start; see INSTALL.txt, step 2.
           Licence: GPL-3.0 (see COPYING.txt); source: this repository, branch "moza".
           EOF
           gh release create "$TAG" "TelemFFB-MOZA-$VERSION.zip" --repo "$GITHUB_REPOSITORY" \
