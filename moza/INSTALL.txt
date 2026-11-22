@@ -12,8 +12,10 @@ Source and updates: https://github.com/AlexZabol/VPforce-TelemFFB (branch "moza"
 ------------------------------
 a) MOZA Cockpit - https://mozaracing.com (Downloads). It installs the MOZA DeviceService
    that TelemFFB talks to. Make sure the base works in MOZA Cockpit.
-b) DirectLink - TelemFFB's DirectInput bridge for non-VPforce devices. Download it from
-   the link in TelemFFB: System Settings > Integrations.
+b) DirectLink - a separate free project that lets TelemFFB drive DirectInput force feedback
+   devices of other makers, MOZA included (the same as for the official TelemFFB).
+   Download the installer from https://directlink.flyfrisby.com and run it.
+   (TelemFFB also links to it in System Settings > Integrations.)
 c) MOZA SDK - https://mozaracing.com/pages/sdk (Flight SDK, file MOZA_SDK_x.x.x.x_en.zip).
    Only one file of it is needed (step 2). It is not included here: MOZA does not allow
    redistributing it.
@@ -53,9 +55,13 @@ Manual: download the Flight SDK zip (named MOZA_SDK_<version>_en.zip) from
 --------
 - Close the MOZA Cockpit window (its background service may keep running).
   TelemFFB and MOZA Cockpit cannot use the base at the same time.
-- Do not run the official VPforce TelemFFB at the same time.
-- Start VPforce-TelemFFB.exe. On first start, assign your MOZA base in System Settings
-  (enable DirectInput devices if asked).
+- Do not run the official VPforce TelemFFB at the same time (see "Official TelemFFB too" below).
+- Start VPforce-TelemFFB.exe. On first start:
+  a) System Settings > Integrations: enable DirectLink.
+  b) System Settings: select your AB9 as the joystick device. DirectInput devices are
+     marked [DI] in the device lists.
+  c) DCS (also IL-2 and BMS): like the official TelemFFB, DirectInput devices need the
+     DirectInput Tap. Set it up on the Simulator Setup tab, on the page of each simulator.
 - The log (Log menu) should show:  "MOZA: SDK effect channel open on 'AB9 Base'".
   If it says MOZA_SDK.dll is missing, repeat step 2.
 
@@ -76,6 +82,14 @@ Manual: download the Flight SDK zip (named MOZA_SDK_<version>_en.zip) from
 Accept the update offer at start (or Utilities > Install Latest TelemFFB MOZA). Manually:
 download the newest TelemFFB-MOZA-x.y.z.zip from https://github.com/AlexZabol/VPforce-TelemFFB/releases
 and unzip it over this folder (MOZA_SDK.dll stays).
+
+
+6. Official TelemFFB too
+------------------------
+Both can stay installed: put TelemFFB MOZA in its own folder (e.g. C:\TelemFFB-MOZA), never
+over the official TelemFFB. They share the same settings (%LOCALAPPDATA%\VPForce-TelemFFB),
+so aircraft settings carry over; the official TelemFFB ignores the MOZA-only settings.
+Run only one of them at a time.
 
 
 Licence: GPL-3.0 (see COPYING.txt in the repository). Based on VPforce TelemFFB
