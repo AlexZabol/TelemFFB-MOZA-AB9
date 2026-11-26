@@ -634,7 +634,13 @@ class SettingsLayout(QGridLayout):
         self.unit_previous_values = {}
         self.revert_targets = {}
         if result is None:
-            cls, pat, result = xmlutils.read_single_model(G.settings_mgr.current_sim, G.settings_mgr.current_aircraft_name, G.settings_mgr.current_class)
+            # Offline, the form shows the profile picked in the offline editor - the
+            # one edits are written to - not the aircraft's mapped active profile
+            # (otherwise an edit lands in one profile while the form keeps showing
+            # another, and the dropdown appears stuck)
+            profile = G.settings_mgr.active_profile if G.settings_mgr.offline_mode else None
+            cls, pat, result = xmlutils.read_single_model(G.settings_mgr.current_sim, G.settings_mgr.current_aircraft_name,
+                                                          G.settings_mgr.current_class, active_profile=profile or None)
             G.settings_mgr.current_pattern = pat
         if result:
             self.build_rows(result)
