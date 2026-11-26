@@ -385,6 +385,14 @@ class PreviewRunner:
         if self.frame_index == 0:
             # a preview plays through the mute; the levels still apply
             self._mute_suspended = effect_levels.levels.set_mute_suspended(True)
+            # the effect method runs instead of on_telemetry, so the MOZA base
+            # mode MixIn would never see this aircraft: apply its mode here
+            apply_mode = getattr(ac, '_apply_moza_base_mode', None)
+            if callable(apply_mode):
+                try:
+                    apply_mode()
+                except Exception:
+                    logging.exception(f"Preview {self.spec.name}: applying the MOZA base mode failed")
         if self.frame_index == 0 and self.spec.constant_force:
             ac.effects['preview_spring'].spring(REFERENCE_SPRING, REFERENCE_SPRING).start()
         frame = self.build_frame(self.progress)

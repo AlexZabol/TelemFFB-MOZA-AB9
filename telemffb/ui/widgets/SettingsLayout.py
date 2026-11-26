@@ -634,7 +634,13 @@ class SettingsLayout(QGridLayout):
         self.unit_previous_values = {}
         self.revert_targets = {}
         if result is None:
-            cls, pat, result = xmlutils.read_single_model(G.settings_mgr.current_sim, G.settings_mgr.current_aircraft_name, G.settings_mgr.current_class)
+            # Offline, the form shows the profile picked in the offline editor - the
+            # one edits are written to - not the aircraft's mapped active profile
+            # (otherwise an edit lands in one profile while the form keeps showing
+            # another, and the dropdown appears stuck)
+            profile = G.settings_mgr.active_profile if G.settings_mgr.offline_mode else None
+            cls, pat, result = xmlutils.read_single_model(G.settings_mgr.current_sim, G.settings_mgr.current_aircraft_name,
+                                                          G.settings_mgr.current_class, active_profile=profile or None)
             G.settings_mgr.current_pattern = pat
         if result:
             self.build_rows(result)
@@ -1987,6 +1993,10 @@ class SettingsLayout(QGridLayout):
                     # action icon reflects the layer now in effect, e.g. a
                     # sim/class override icon hiding under the erased override
                     self.trigger_form_reload = True
+                elif setting_name == 'moza_base_mode':
+                    # nothing to write, but the base must still take the chosen mode
+                    # (erase_from_xml above applies it when an override was erased)
+                    G.settings_mgr.apply_moza_base_mode(value)
                 return True
         G.settings_mgr.write_to_xml(G.settings_mgr.current_sim, G.settings_mgr.current_class, G.settings_mgr.current_pattern, value, setting_name, unit)
         if target is not None:
