@@ -339,6 +339,15 @@ class TestPreviewRunnerMechanics(BaseTelemetryEffectTestCase):
         runner = PreviewRunner(ac, PreviewSpec(**kw), 'DCS', **runner_kw)
         return ac, runner
 
+    def test_applies_the_moza_base_mode_once_before_the_first_frame(self):
+        """The preview calls the effect method, not on_telemetry, so it applies
+        the aircraft's MOZA base mode itself (offline Force Sensing preview)."""
+        ac, runner = self._runner(dict(duration=1.0), frame_rate=10.0)
+        applied = []
+        ac._apply_moza_base_mode = lambda: applied.append(len(ac.calls))
+        runner.run(sleep=lambda _: None)
+        assert applied == [0]
+
     def test_frame_count_follows_duration_and_rate(self):
         _, runner = self._runner(dict(duration=1.0), frame_rate=30.0)
         assert runner.frames_total == 30
