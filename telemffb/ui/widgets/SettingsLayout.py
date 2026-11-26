@@ -1987,6 +1987,10 @@ class SettingsLayout(QGridLayout):
                     # action icon reflects the layer now in effect, e.g. a
                     # sim/class override icon hiding under the erased override
                     self.trigger_form_reload = True
+                elif setting_name == 'moza_base_mode':
+                    # nothing to write, but the base must still take the chosen mode
+                    # (erase_from_xml above applies it when an override was erased)
+                    G.settings_mgr.apply_moza_base_mode(value)
                 return True
         G.settings_mgr.write_to_xml(G.settings_mgr.current_sim, G.settings_mgr.current_class, G.settings_mgr.current_pattern, value, setting_name, unit)
         if target is not None:
